@@ -1,255 +1,307 @@
-# Prototype
-snippet proto
-	${1:class_name}.prototype.${2:method_name} = function(${3:first_argument}) {
-		${4:// body...}
+# Get Canvas Context
+snippet getCtx
+	const canvas = document.getElementById('${1:canvas}');
+	const ctx = canvas.getContext('${2:2d}');
+
+# Set Fill Style
+snippet fillStyle
+	ctx.fillStyle = '${1:#000}';
+
+# Set Stroke Style
+snippet strokeStyle
+	ctx.strokeStyle = '${1:#000}';
+
+# Set Line Width
+snippet lineWidth
+	ctx.lineWidth = ${1:2};
+
+# Draw Rectangle
+snippet rect
+	ctx.fillRect(${1:x}, ${2:y}, ${3:width}, ${4:height});
+
+# Draw Stroked Rectangle
+snippet strokeRect
+	ctx.strokeRect(${1:x}, ${2:y}, ${3:width}, ${4:height});
+
+# Clear Rectangle
+snippet clearRect
+	ctx.clearRect(${1:x}, ${2:y}, ${3:width}, ${4:height});
+
+# Draw Circle
+snippet circle
+	ctx.beginPath();
+	ctx.arc(${1:x}, ${2:y}, ${3:radius}, 0, 2 * Math.PI);
+	ctx.fill();
+
+# Draw Line
+snippet line
+	ctx.beginPath();
+	ctx.moveTo(${1:x1}, ${2:y1});
+	ctx.lineTo(${3:x2}, ${4:y2});
+	ctx.stroke();
+
+# Draw Text
+snippet text
+	ctx.font = '${1:16px Arial}';
+	ctx.fillText('${2:Your Text}', ${3:x}, ${4:y});
+
+# Load Image
+snippet loadImage
+	const img = new Image();
+	img.src = '${1:image_src}';
+	img.onload = function() {
+		ctx.drawImage(img, ${2:x}, ${3:y}, ${4:width}, ${5:height});
 	};
-# Function
-snippet fun
-	function ${1?:function_name}(${2:argument}) {
-		${3:// body...}
-	}
-# Anonymous Function
-regex /((=)\s*|(:)\s*|(\()|\b)/f/(\))?/
-snippet f
-	function${M1?: ${1:functionName}}($2) {
-		${0}
-	}${M2?;}${M3?,}${M4?)}
-# Immediate function
-trigger \(?f\(
-endTrigger \)?
-snippet f(
-	(function(${1}) {
-		${0:/* code */}
-	}(${1}));
-# if
-snippet if
-	if (${1:true}) {
-		${0}
-	}
-# if ... else
-snippet ife
-	if (${1:true}) {
-		${2}
-	} else {
-		${0}
-	}
-# tertiary conditional
-snippet ter
-	${1:/* condition */} ? ${2:a} : ${3:b}
-# switch
-snippet switch
-	switch (${1:expression}) {
-		case '${3:case}':
-			${4:// code}
-			break;
-		${5}
-		default:
-			${2:// code}
-	}
-# case
-snippet case
-	case '${1:case}':
-		${2:// code}
-		break;
-	${3}
 
-# while (...) {...}
-snippet wh
-	while (${1:/* condition */}) {
-		${0:/* code */}
+# Create Gradient
+snippet gradient
+	const gradient = ctx.create${1:Linear}Gradient(${2:x0}, ${3:y0}, ${4:x1}, ${5:y1});
+	gradient.addColorStop(${6:0}, '${7:#000}');
+	gradient.addColorStop(${8:1}, '${9:#fff}');
+	ctx.fillStyle = gradient;
+	ctx.fillRect(${10:x}, ${11:y}, ${12:width}, ${13:height});
+
+# Create Radial Gradient
+snippet radialGradient
+	const radialGradient = ctx.createRadialGradient(${1:x0}, ${2:y0}, ${3:r0}, ${4:x1}, ${5:y1}, ${6:r1});
+	radialGradient.addColorStop(${7:0}, '${8:#000}');
+	radialGradient.addColorStop(${9:1}, '${10:#fff}');
+	ctx.fillStyle = radialGradient;
+	ctx.fillRect(${11:x}, ${12:y}, ${13:width}, ${14:height});
+
+# Draw Image to Canvas
+snippet drawImage
+	const img = new Image();
+	img.src = '${1:image_path}';
+	img.onload = function() {
+		ctx.drawImage(img, ${2:x}, ${3:y}, ${4:width}, ${5:height});
+	};
+
+# Save and Restore Canvas State
+snippet saveRestore
+	ctx.save();
+	${1:// code to apply transformations or styles}
+	ctx.restore();
+
+# Rotate Canvas
+snippet rotate
+	ctx.save();
+	ctx.translate(${1:x}, ${2:y});
+	ctx.rotate(${3:angle} * Math.PI / 180);
+	${4:// draw rotated elements}
+	ctx.restore();
+
+# Scale Canvas
+snippet scale
+	ctx.save();
+	ctx.scale(${1:x_scale}, ${2:y_scale});
+	${3:// draw scaled elements}
+	ctx.restore();
+
+# Translate Canvas
+snippet translate
+	ctx.translate(${1:x}, ${2:y});
+
+# Draw Bezier Curve
+snippet bezierCurve
+	ctx.beginPath();
+	ctx.moveTo(${1:x1}, ${2:y1});
+	ctx.bezierCurveTo(${3:cp1x}, ${4:cp1y}, ${5:cp2x}, ${6:cp2y}, ${7:x2}, ${8:y2});
+	ctx.stroke();
+
+# Draw Quadratic Curve
+snippet quadraticCurve
+	ctx.beginPath();
+	ctx.moveTo(${1:x1}, ${2:y1});
+	ctx.quadraticCurveTo(${3:cpx}, ${4:cpy}, ${5:x2}, ${6:y2});
+	ctx.stroke();
+	# Line Styles
+## 2.2.6.1 lineWidth
+snippet lineWidth
+	ctx.lineWidth = ${1:2};
+
+## 2.2.6.2 lineCap
+snippet lineCap
+	ctx.lineCap = '${1:butt}'; // values can be 'butt', 'round', 'square'
+
+## 2.2.6.3 lineJoin
+snippet lineJoin
+	ctx.lineJoin = '${1:miter}'; // values can be 'round', 'bevel', 'miter'
+
+## 2.2.6.4 miterLimit
+snippet miterLimit
+	ctx.miterLimit = ${1:10};
+
+# Shadows
+## 2.2.7.1 shadowOffsetX
+snippet shadowOffsetX
+	ctx.shadowOffsetX = ${1:4};
+
+## 2.2.7.2 shadowOffsetY
+snippet shadowOffsetY
+	ctx.shadowOffsetY = ${1:4};
+
+## 2.2.7.3 shadowBlur
+snippet shadowBlur
+	ctx.shadowBlur = ${1:10};
+
+## 2.2.7.4 shadowColor
+snippet shadowColor
+	ctx.shadowColor = '${1:rgba(0, 0, 0, 0.5)}';
+
+# Simple Shapes (Rectangles)
+## 2.2.8.1 fillRect
+snippet fillRect
+	ctx.fillRect(${1:x}, ${2:y}, ${3:width}, ${4:height});
+
+## 2.2.8.2 strokeRect
+snippet strokeRect
+	ctx.strokeRect(${1:x}, ${2:y}, ${3:width}, ${4:height});
+
+## 2.2.8.3 clearRect
+snippet clearRect
+	ctx.clearRect(${1:x}, ${2:y}, ${3:width}, ${4:height});
+
+# Complex Shapes (Paths)
+## 2.2.9.1 beginPath
+snippet beginPath
+	ctx.beginPath();
+
+## 2.2.9.2 closePath
+snippet closePath
+	ctx.closePath();
+
+## 2.2.9.3 stroke
+snippet stroke
+	ctx.stroke();
+
+## 2.2.9.4 fill
+snippet fill
+	ctx.fill();
+
+## 2.2.9.5 lineTo
+snippet lineTo
+	ctx.lineTo(${1:x}, ${2:y});
+
+## 2.2.9.6 moveTo
+snippet moveTo
+	ctx.moveTo(${1:x}, ${2:y});
+
+## 2.2.9.7 rect
+snippet rect
+	ctx.rect(${1:x}, ${2:y}, ${3:width}, ${4:height});
+
+## 2.2.9.8 quadraticCurveTo
+snippet quadraticCurveTo
+	ctx.quadraticCurveTo(${1:cpX}, ${2:cpY}, ${3:x}, ${4:y});
+
+## 2.2.9.9 bezierCurveTo
+snippet bezierCurveTo
+	ctx.bezierCurveTo(${1:cp1X}, ${2:cp1Y}, ${3:cp2X}, ${4:cp2Y}, ${5:x}, ${6:y});
+
+## 2.2.9.10 arc
+snippet arc
+	ctx.arc(${1:x}, ${2:y}, ${3:radius}, ${4:startAngle}, ${5:endAngle}, ${6:false});
+
+## 2.2.9.11 arcTo
+snippet arcTo
+	ctx.arcTo(${1:x1}, ${2:y1}, ${3:x2}, ${4:y2}, ${5:radius});
+
+## 2.2.9.12 clip
+snippet clip
+	ctx.clip();
+
+## 2.2.9.13 isPointInPath
+snippet isPointInPath
+	ctx.isPointInPath(${1:x}, ${2:y});
+
+# Text
+## 2.2.10.1 font
+snippet font
+	ctx.font = '${1:16px Arial}';
+
+## 2.2.10.2 textAlign
+snippet textAlign
+	ctx.textAlign = '${1:left}'; // 'left', 'right', 'center', 'start', 'end'
+
+## 2.2.10.3 textBaseline
+snippet textBaseline
+	ctx.textBaseline = '${1:alphabetic}'; // 'top', 'hanging', 'middle', 'alphabetic', 'ideographic', 'bottom'
+
+## 2.2.10.4 fillText
+snippet fillText
+	ctx.fillText('${1:text}', ${2:x}, ${3:y}, ${4:maxWidth});
+
+## 2.2.10.5 strokeText
+snippet strokeText
+	ctx.strokeText('${1:text}', ${2:x}, ${3:y}, ${4:maxWidth});
+
+## 2.2.10.6 measureText
+snippet measureText
+	const textWidth = ctx.measureText('${1:text}').width;
+
+# Drawing Images
+## 2.2.11.1 drawImage (dx, dy)
+snippet drawImage
+	const img = new Image();
+	img.src = '${1:imageSrc}';
+	img.onload = function() {
+		ctx.drawImage(img, ${2:dx}, ${3:dy});
+	};
+
+## 2.2.11.2 drawImage (dx, dy, dw, dh)
+snippet drawImageDwDh
+	ctx.drawImage(${1:image}, ${2:dx}, ${3:dy}, ${4:dw}, ${5:dh});
+
+## 2.2.11.3 drawImage (sx, sy, sw, sh, dx, dy, dw, dh)
+snippet drawImageFull
+	ctx.drawImage(${1:image}, ${2:sx}, ${3:sy}, ${4:sw}, ${5:sh}, ${6:dx}, ${7:dy}, ${8:dw}, ${9:dh});
+
+# Pixel Manipulation
+## 2.2.12.1 ImageData
+snippet ImageData
+	const imageData = ctx.getImageData(${1:sx}, ${2:sy}, ${3:sw}, ${4:sh});
+
+## 2.2.12.2 createImageData
+snippet createImageData
+	const newImageData = ctx.createImageData(${1:width}, ${2:height});
+
+## 2.2.12.3 getImageData
+snippet getImageData
+	const imageData = ctx.getImageData(${1:sx}, ${2:sy}, ${3:sw}, ${4:sh});
+
+## 2.2.12.4 putImageData
+snippet putImageData
+	ctx.putImageData(${1:imageData}, ${2:dx}, ${3:dy});
+	# 3.4.1 strokeCircle
+snippet strokeCircle
+	function strokeCircle(x, y, radius) {
+		ctx.beginPath();
+		ctx.arc(x, y, radius, 0, 2 * Math.PI);
+		ctx.stroke();
 	}
-# try
-snippet try
-	try {
-		${0:/* code */}
-	} catch (e) {}
-# do...while
-snippet do
-	do {
-		${2:/* code */}
-	} while (${1:/* condition */});
-# Object Method
-snippet :f
-regex /([,{[])|^\s*/:f/
-	${1:method_name}: function(${2:attribute}) {
-		${0}
-	}${3:,}
-# Timer functions
-snippet setTimeout
-regex /\b/st|timeout|setTimeo?u?t?/
-	setTimeout(function() {${2}}, ${1:10});
-snippet setInterval
-	setInterval(function() {${2}}, ${1:10});
-# Get Elements
-snippet gett
-	getElementsBy${1:TagName}('${2}')${3}
-snippet query
-	querySelector("${1}")
-# Get Element
-snippet get
-	getElementBy${1:Id}('${2}')${3}
-snippet queryAll
-	querySelectorAll("${1}")
-# eventlistener
-snippet addeventlistener
-	addEventListener("${1:click}", ${2})
-# console.log (Firebug)
-snippet cl
-	console.log(${1});
-# return
-snippet ret
-	return ${1:result}
-# hasOwnProperty
-snippet has
-	hasOwnProperty(${1})
-# docstring
-snippet /**
-	/**
-	 * ${1:description}
-	 *
-	 */
-snippet @par
-regex /^\s*\*\s*/@(para?m?)?/
-	param {${1:type}} ${2:name} ${3:description}
-snippet @ret
-	returns {${1:type}} ${2:description}
-# JSON.parse
-snippet jsonp
-	JSON.parse(${1:jstr});
-# JSON.stringify
-snippet jsons
-	JSON.stringify(${1:object});
-# self-defining function
-snippet sdf
-	var ${1:function_name} = function(${2:argument}) {
-		${3:// initial code ...}
 
-		$1 = function($2) {
-			${4:// main code}
-		};
-	}
-# singleton
-snippet sing
-	function ${1:Singleton} (${2:argument}) {
-		// the cached instance
-		var instance;
-
-		// rewrite the constructor
-		$1 = function $1($2) {
-			return instance;
-		};
-		
-		// carry over the prototype properties
-		$1.prototype = this;
-
-		// the instance
-		instance = new $1();
-
-		// reset the constructor pointer
-		instance.constructor = $1;
-
-		${3:// code ...}
-
-		return instance;
-	}
-# class
-snippet class
-regex /^\s*/clas{0,2}/
-	class ${1:Name}{
-		$0
-	}
-snippet constructor
-	constructor(${1}){
-		this.$1 = $1;
-	}
-snippet method
-	${1:name}(${2:args}) {
-		${0}
-	}
-snippet this.
-	this.${1} = $1;
-# 
-snippet for-
-	for (let ${1:i} = ${2:Things}.length; ${1:i}--; ) {
-		${0:${2:Things}[${1:i}];}
-	}
-# for (...) {...}
-snippet for
-	for (let ${1:i} = 0; $1 < ${2:Things}.length; $1++) {
-		${3:$2[$1]}$0
-	}
-# for (...) {...} (Improved Native For-Loop)
-snippet forr
-	for (let ${1:i} = ${2:Things}.length - 1; $1 >= 0; $1--) {
-		${3:$2[$1]}$0
-	}
-# for (property in object ) { ... }
-snippet fori
-	for (let ${1:prop} in ${2:Things}) {
-		${0:$2[$1]}
+# 3.4.1 fillCircle
+snippet fillCircle
+	function fillCircle(x, y, radius) {
+		ctx.beginPath();
+		ctx.arc(x, y, radius, 0, 2 * Math.PI);
+		ctx.fill();
 	}
 
-#modules
-snippet def
-	define(function(require, exports, module) {
-	"use strict";
-	const ${1/.*\///} = require("${1}");
-	
-	});
-snippet req
-guard ^\s*
-	const ${1/.*\///} = require("${1}");
-	$0
-snippet requ
-guard ^\s*
-	const ${1/.*\/(.)/\u$1/} = require("${1}").${1/.*\/(.)/\u$1/};
-	$0
-snippet prom
-	new Promise((resolve, reject) => {
-		$1
-	});
-snippet cl
-	console.log($1);
-snippet qs
-	document.querySelector($1)
-snippet qsa
-	document.querySelectorAll($1)
-	# Event Listener
-snippet addeventlistener
-	addEventListener("${1:event}", ${2:callback})
-
-# Timer: setTimeout
-snippet setTimeout
-	setTimeout(function() {${2}}, ${1:delay});
-
-# Timer: setInterval
-snippet setInterval
-	setInterval(function() {${2}}, ${1:interval});
-
-# Get Element
-snippet get
-	document.getElementBy${1:Id}('${2}');
-
-# Query Selector
-snippet query
-	document.querySelector("${1}");
-
-# Query Selector All
-snippet queryAll
-	document.querySelectorAll("${1}");
-# Promise
-snippet prom
-	new Promise((resolve, reject) => {
-		$1
-	});
-
-# Require Module
-snippet req
-	const ${1/.*\///} = require("${1}");
-	
-# Define Module
-snippet def
-	define(function(require, exports, module) {
-		"use strict";
-		const ${1/.*\///} = require("${1}");
-	});
+# 3.4.2 addGrid
+snippet addGrid
+	function addGrid(delta, color, font) {
+		ctx.strokeStyle = color || '#ccc';
+		ctx.font = font || '12px Arial';
+		for (let x = delta; x < canvas.width; x += delta) {
+			ctx.moveTo(x, 0);
+			ctx.lineTo(x, canvas.height);
+			ctx.stroke();
+		}
+		for (let y = delta; y < canvas.height; y += delta) {
+			ctx.moveTo(0, y);
+			ctx.lineTo(canvas.width, y);
+			ctx.stroke();
+		}
+	}

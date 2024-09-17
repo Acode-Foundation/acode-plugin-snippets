@@ -142,3 +142,193 @@ snippet async arrow function
 	async (${1:params}:${2:type}) => {
 		$0
 	}
+# 3.4.1 strokeCircle
+snippet strokeCircle
+function strokeCircle(x: number, y: number, radius: number): void {
+	ctx.beginPath();
+	ctx.arc(x, y, radius, 0, 2 * Math.PI);
+	ctx.stroke();
+}
+
+# 3.4.1 fillCircle
+snippet fillCircle
+function fillCircle(x: number, y: number, radius: number): void {
+	ctx.beginPath();
+	ctx.arc(x, y, radius, 0, 2 * Math.PI);
+	ctx.fill();
+}
+
+# 3.4.2 addGrid
+snippet addGrid
+function addGrid(delta: number, color: string = '#ccc', font: string = '12px Arial'): void {
+	ctx.strokeStyle = color;
+	ctx.font = font;
+	for (let x = delta; x < canvas.width; x += delta) {
+		ctx.moveTo(x, 0);
+		ctx.lineTo(x, canvas.height);
+		ctx.stroke();
+	}
+	for (let y = delta; y < canvas.height; y += delta) {
+		ctx.moveTo(0, y);
+		ctx.lineTo(canvas.width, y);
+		ctx.stroke();
+	}
+}
+# Line Styles
+## 2.2.6.1 lineWidth
+snippet lineWidth
+	ctx.lineWidth = ${1:2};
+
+## 2.2.6.2 lineCap
+snippet lineCap
+	ctx.lineCap = '${1:butt}'; // values can be 'butt', 'round', 'square'
+
+## 2.2.6.3 lineJoin
+snippet lineJoin
+	ctx.lineJoin = '${1:miter}'; // values can be 'round', 'bevel', 'miter'
+
+## 2.2.6.4 miterLimit
+snippet miterLimit
+	ctx.miterLimit = ${1:10};
+
+# Shadows
+## 2.2.7.1 shadowOffsetX
+snippet shadowOffsetX
+	ctx.shadowOffsetX = ${1:4};
+
+## 2.2.7.2 shadowOffsetY
+snippet shadowOffsetY
+	ctx.shadowOffsetY = ${1:4};
+
+## 2.2.7.3 shadowBlur
+snippet shadowBlur
+	ctx.shadowBlur = ${1:10};
+
+## 2.2.7.4 shadowColor
+snippet shadowColor
+	ctx.shadowColor = '${1:rgba(0, 0, 0, 0.5)}';
+
+# Simple Shapes (Rectangles)
+## 2.2.8.1 fillRect
+snippet fillRect
+	ctx.fillRect(${1:x}, ${2:y}, ${3:width}, ${4:height});
+
+## 2.2.8.2 strokeRect
+snippet strokeRect
+	ctx.strokeRect(${1:x}, ${2:y}, ${3:width}, ${4:height});
+
+## 2.2.8.3 clearRect
+snippet clearRect
+	ctx.clearRect(${1:x}, ${2:y}, ${3:width}, ${4:height});
+
+# Complex Shapes (Paths)
+## 2.2.9.1 beginPath
+snippet beginPath
+	ctx.beginPath();
+
+## 2.2.9.2 closePath
+snippet closePath
+	ctx.closePath();
+
+## 2.2.9.3 stroke
+snippet stroke
+	ctx.stroke();
+
+## 2.2.9.4 fill
+snippet fill
+	ctx.fill();
+
+## 2.2.9.5 lineTo
+snippet lineTo
+	ctx.lineTo(${1:x}, ${2:y});
+
+## 2.2.9.6 moveTo
+snippet moveTo
+	ctx.moveTo(${1:x}, ${2:y});
+
+## 2.2.9.7 rect
+snippet rect
+	ctx.rect(${1:x}, ${2:y}, ${3:width}, ${4:height});
+
+## 2.2.9.8 quadraticCurveTo
+snippet quadraticCurveTo
+	ctx.quadraticCurveTo(${1:cpX}, ${2:cpY}, ${3:x}, ${4:y});
+
+## 2.2.9.9 bezierCurveTo
+snippet bezierCurveTo
+	ctx.bezierCurveTo(${1:cp1X}, ${2:cp1Y}, ${3:cp2X}, ${4:cp2Y}, ${5:x}, ${6:y});
+
+## 2.2.9.10 arc
+snippet arc
+	ctx.arc(${1:x}, ${2:y}, ${3:radius}, ${4:startAngle}, ${5:endAngle}, ${6:false});
+
+## 2.2.9.11 arcTo
+snippet arcTo
+	ctx.arcTo(${1:x1}, ${2:y1}, ${3:x2}, ${4:y2}, ${5:radius});
+
+## 2.2.9.12 clip
+snippet clip
+	ctx.clip();
+
+## 2.2.9.13 isPointInPath
+snippet isPointInPath
+	ctx.isPointInPath(${1:x}, ${2:y});
+
+# Text
+## 2.2.10.1 font
+snippet font
+	ctx.font = '${1:16px Arial}';
+
+## 2.2.10.2 textAlign
+snippet textAlign
+	ctx.textAlign = '${1:left}'; // 'left', 'right', 'center', 'start', 'end'
+
+## 2.2.10.3 textBaseline
+snippet textBaseline
+	ctx.textBaseline = '${1:alphabetic}'; // 'top', 'hanging', 'middle', 'alphabetic', 'ideographic', 'bottom'
+
+## 2.2.10.4 fillText
+snippet fillText
+	ctx.fillText('${1:text}', ${2:x}, ${3:y}, ${4:maxWidth});
+
+## 2.2.10.5 strokeText
+snippet strokeText
+	ctx.strokeText('${1:text}', ${2:x}, ${3:y}, ${4:maxWidth});
+
+## 2.2.10.6 measureText
+snippet measureText
+	const textWidth = ctx.measureText('${1:text}').width;
+
+# Drawing Images
+## 2.2.11.1 drawImage (dx, dy)
+snippet drawImage
+	const img = new Image();
+	img.src = '${1:imageSrc}';
+	img.onload = () => {
+		ctx.drawImage(img, ${2:dx}, ${3:dy});
+	};
+
+## 2.2.11.2 drawImage (dx, dy, dw, dh)
+snippet drawImageDwDh
+	ctx.drawImage(${1:image}, ${2:dx}, ${3:dy}, ${4:dw}, ${5:dh});
+
+## 2.2.11.3 drawImage (sx, sy, sw, sh, dx, dy, dw, dh)
+snippet drawImageFull
+	ctx.drawImage(${1:image}, ${2:sx}, ${3:sy}, ${4:sw}, ${5:sh}, ${6:dx}, ${7:dy}, ${8:dw}, ${9:dh});
+
+# Pixel Manipulation
+## 2.2.12.1 ImageData
+snippet ImageData
+	const imageData: ImageData = ctx.getImageData(${1:sx}, ${2:sy}, ${3:sw}, ${4:sh});
+
+## 2.2.12.2 createImageData
+snippet createImageData
+	const newImageData: ImageData = ctx.createImageData(${1:width}, ${2:height});
+
+## 2.2.12.3 getImageData
+snippet getImageData
+	const imageData: ImageData = ctx.getImageData(${1:sx}, ${2:sy}, ${3:sw}, ${4:sh});
+
+## 2.2.12.4 putImageData
+snippet putImageData
+	ctx.putImageData(${1:imageData}, ${2:dx}, ${3:dy});
