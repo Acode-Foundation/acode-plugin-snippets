@@ -1,4 +1,4 @@
-# acode-plugin-snippets
+# Canvas api
 ![version](https://img.shields.io/badge/Latest%20version-V1.2.3-green)
 > canvas api plugin for acode editor. It providethe canvas api autocompletion for JavaScriptand Typescript language
 
