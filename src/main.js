@@ -123,6 +123,8 @@ class AcodeSnippets {
 
       case 'markdown':
         return ['html'];
+      case 'hbs':
+        return ["html"]
 
       default:
         return null;
