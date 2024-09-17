@@ -1,6 +1,6 @@
 # acode-plugin-snippets
 ![version](https://img.shields.io/badge/Latest%20version-V1.2.3-green)
-> Snippets plugin for acode editor. It provides autocompletion of codes of different languages that are listed below.
+> canvas api plugin for acode editor. It providethe canvas api autocompletion for JavaScriptand Typescript language
 
 **NOTE:** This plugin is not fully supported in Acode version lower than v1.6.0 (212).
 Please update your **Acode App** to latest version for using this plugin.
@@ -19,65 +19,13 @@ Please update your **Acode App** to latest version for using this plugin.
 - Type `reset snippets path`
 - Restart the app.
 
-## Supported languages in Snippet Plugin
+## Supported languages by canvas api Plugin
 
-- Abc
-- ActionScript
-- Blade
-- C/C++
-- Clojure
-- Coffee
-- CsoundSynthesizer
-- CsoundOrchestra
-- CSS
-- Dart
-- Diff
-- Django
-- Drools
-- Edifacts
-- Erlang
-- Fsl
-- Gobstones
-- Golang
-- Graphqlschema
-- Haml
-- Haskell
-- HTML
-- Java
-- JavaScript
-- Jsp
-- Jsx
-- Kotlin
-- Liquid
-- Lsl
-- Lua
-- Makefile
-- Markdown
-- Maze
-- Perl
-- Php
-- Python
-- R
-- Razor
-- Robot
-- Rst
-- Ruby
-- Rust
-- Sh
-- Snippets
-- SQL
-- SQLServer
-- Swift
-- TCL
-- Textile
-- Tsx
-- Twig
 - Typescript
-- Velocity
-- Wallok
+- javascript
 
-## Authors
-- [@Ajit Kumar](https://github.com/deadlyjack)
+## Author
+- [superbinjaX2](https://github.com/superninjaxii)
 
 ## How to write snippets?
 
@@ -85,6 +33,4 @@ Check out [this](https://cloud9-sdk.readme.io/docs/snippets) article on how to w
 
 ## Upcomming updates
 
-- Create snippets for language that are not already available.
-
-Thank you for using Acode and acode-plugin-snippets.
+webgl
