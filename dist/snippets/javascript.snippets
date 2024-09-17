@@ -208,3 +208,48 @@ snippet prom
 	new Promise((resolve, reject) => {
 		$1
 	});
+snippet cl
+	console.log($1);
+snippet qs
+	document.querySelector($1)
+snippet qsa
+	document.querySelectorAll($1)
+	# Event Listener
+snippet addeventlistener
+	addEventListener("${1:event}", ${2:callback})
+
+# Timer: setTimeout
+snippet setTimeout
+	setTimeout(function() {${2}}, ${1:delay});
+
+# Timer: setInterval
+snippet setInterval
+	setInterval(function() {${2}}, ${1:interval});
+
+# Get Element
+snippet get
+	document.getElementBy${1:Id}('${2}');
+
+# Query Selector
+snippet query
+	document.querySelector("${1}");
+
+# Query Selector All
+snippet queryAll
+	document.querySelectorAll("${1}");
+# Promise
+snippet prom
+	new Promise((resolve, reject) => {
+		$1
+	});
+
+# Require Module
+snippet req
+	const ${1/.*\///} = require("${1}");
+	
+# Define Module
+snippet def
+	define(function(require, exports, module) {
+		"use strict";
+		const ${1/.*\///} = require("${1}");
+	});
