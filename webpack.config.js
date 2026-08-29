@@ -1,10 +1,22 @@
-const { exec } = require('child_process');
-const path = require('path');
+const path = require('node:path');
+const { packZip } = require('./dev/pack-zip');
 
-module.exports = (env, options) => {
+function createPackZipPlugin(pack = packZip, logger = console) {
+  return {
+    apply(compiler) {
+      compiler.hooks.done.tapPromise('pack-zip', async (stats) => {
+        if (stats.hasErrors()) return;
+        const outputFile = await pack();
+        logger.log(`${path.basename(outputFile)} written.`);
+      });
+    },
+  };
+}
+
+function createWebpackConfig(_environment, options) {
   const { mode = 'development' } = options;
 
-  const main = {
+  return [{
     mode,
     entry: {
       main: './src/main.js',
@@ -16,27 +28,13 @@ module.exports = (env, options) => {
       rules: [
         {
           test: /\.(js|jsx)$/i,
-          loader: "babel-loader",
+          loader: 'babel-loader',
         },
       ],
     },
-    plugins: [
-      {
-        apply: (compiler) => {
-          compiler.hooks.afterDone.tap('pack-zip', () => {
-            // run pack-zip.js
-            exec('node .vscode/pack-zip.js', (err, stdout, stderr) => {
-              if (err) {
-                console.error(err);
-                return;
-              }
-              console.log(stdout);
-            });
-          });
-        }
-      }
-    ],
-  };
-
-  return [main];
+    plugins: [createPackZipPlugin()],
+  }];
 }
+
+module.exports = createWebpackConfig;
+module.exports.createPackZipPlugin = createPackZipPlugin;

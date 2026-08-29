@@ -2,7 +2,7 @@
   "id": "acode.plugin.snippets",
   "name": "Snippets",
   "main": "dist/main.js",
-  "version": "1.2.7",
+  "version": "2.0.0",
   "readme": "readme.md",
   "icon": "icon.png",
   "files": [
@@ -39,6 +39,7 @@
     "snippets/maze.snippets",
     "snippets/perl.snippets",
     "snippets/php.snippets",
+    "snippets/php_laravel_blade.snippets",
     "snippets/python.snippets",
     "snippets/r.snippets",
     "snippets/razor.snippets",
