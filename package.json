@@ -1,7 +1,7 @@
 {
   "name": "acode-plugin-snippets",
-  "version": "1.2.7",
-  "description": "Snippets plugin for Acode",
+  "version": "2.0.0",
+  "description": "Snippets plugin for Acode's Ace and CodeMirror editors",
   "main": "dist/main.js",
   "repository": "https://github.com/deadlyjack/acode-plugin-snippets.git",
   "author": "Ajit <me@ajitkumar.dev>",
@@ -12,7 +12,13 @@
   "devDependencies": {
     "@babel/core": "^7.18.13",
     "@babel/preset-env": "^7.18.10",
+    "@codemirror/autocomplete": "6.20.3",
+    "@codemirror/commands": "6.11.0",
+    "@codemirror/language": "6.12.4",
+    "@codemirror/state": "6.7.1",
+    "@codemirror/view": "6.43.9",
     "babel-loader": "^9.1.2",
+    "jsdom": "26.1.0",
     "jszip": "^3.10.1",
     "live-server": "^1.2.2",
     "raw-loader": "^4.0.2",
@@ -20,8 +26,10 @@
     "webpack-cli": "^5.1.4"
   },
   "scripts": {
+    "test": "node --test \"test/*.test.*\"",
     "build": "webpack",
-    "start-dev": "node .vscode/start-dev",
+    "dev": "node dev/start-dev.js",
+    "start-dev": "node dev/start-dev.js",
     "build-release": "webpack --mode production"
   },
   "browserslist": "cover 100%,not android < 5"
