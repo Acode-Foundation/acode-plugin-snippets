@@ -5,6 +5,51 @@
 **NOTE:** This plugin is not fully supported in Acode version lower than v1.6.0 (212).
 Please update your **Acode App** to latest version for using this plugin.
 
+## Using snippets
+
+A snippet turns a short trigger into a reusable code template. For example, in
+a JavaScript file, type `fun` to use the function snippet.
+
+The workflows below apply to CodeMirror. Ace continues using its native snippet
+completion and expansion behavior.
+
+### With autocomplete suggestions enabled
+
+1. Start typing a snippet trigger.
+2. Select the suggestion marked with the plugin logo and confirm it. You can
+   also type the complete trigger and press <kbd>Tab</kbd> to expand it directly.
+
+### With autocomplete suggestions disabled
+
+Turning off **Autocomplete suggestions** hides plugin snippets from completion
+menus, but it does not disable snippet expansion. Acode's built-in, word, or
+language-server suggestions may still open while you type.
+
+1. Type the complete snippet trigger.
+2. If a completion menu is visible, press <kbd>Esc</kbd> once to close it.
+3. Press <kbd>Tab</kbd> to expand the snippet. If no menu is visible, press
+   <kbd>Tab</kbd> directly.
+
+When a completion menu is visible, <kbd>Esc</kbd> dismisses it. Once a snippet
+session is active, <kbd>Esc</kbd> ends that session.
+
+### Moving through snippet fields
+
+After expansion, the first editable field is selected. Press <kbd>Tab</kbd> to
+move to the next field and <kbd>Shift</kbd>+<kbd>Tab</kbd> to move to the
+previous one. Repeated fields and transformed values update as you edit.
+
+### If a snippet does not expand
+
+If a snippet does not expand, check that:
+
+- The complete trigger is typed exactly, including any punctuation or case.
+- The file has the correct language mode.
+- The expected snippets directory is shown below **Set snippets directory**.
+- A language mapping is configured when the mode and snippet filename differ.
+- Any open completion menu has been dismissed with <kbd>Esc</kbd> before
+  pressing <kbd>Tab</kbd>.
+
 ## Default snippets directory
 
 On a fresh CodeMirror installation, the plugin creates
@@ -57,9 +102,19 @@ native mode and snippet resolution unchanged.
 
 ## CodeMirror support
 
-Ace-format triggers, scopes, guards, tab stops, mirrors, choices, variables, conditionals, and TextMate transforms work in CodeMirror. Matching plugin snippets are prioritized above CodeMirror's built-in suggestions. Use autocomplete or type a complete trigger and press <kbd>Tab</kbd> to expand it. Use <kbd>Tab</kbd> and <kbd>Shift</kbd>+<kbd>Tab</kbd> to move between fields, or <kbd>Escape</kbd> to end the active snippet session.
+Ace-format triggers, scopes, guards, tab stops, mirrors, choices, variables,
+conditionals, and TextMate transforms work in CodeMirror. Follow the
+**Using snippets** guide above for autocomplete, direct expansion, and field
+navigation.
 
-The plugin detects JavaScript and CSS regions embedded in HTML and PHP. Native Ace builds continue to use Ace's own snippet engine.
+Snippet suggestions use the plugin logo in CodeMirror's completion menu, making
+them easy to distinguish from other suggestions. The CodeMirror-only
+**Autocomplete suggestions** setting controls whether snippets appear in that
+menu; it does not disable trigger-plus-Tab expansion, placeholder choices, or
+field navigation.
+
+The plugin detects JavaScript and CSS regions embedded in HTML and PHP. Native
+Ace builds continue to use Ace's own snippet engine and completion behavior.
 
 ## Editing snippet files
 

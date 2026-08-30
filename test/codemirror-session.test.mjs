@@ -8,10 +8,20 @@ import { compileSnippetTemplate } from '../src/snippet-utils.mjs';
 
 function createSessionHarness(initialText = '') {
   let sessionField;
+  const pluginClasses = [];
+  const dispatches = [];
   const defineEffect = () => {
     const type = {
       of(value) {
         return { is: (candidate) => candidate === type, value };
+      },
+    };
+    return type;
+  };
+  const defineAnnotation = () => {
+    const type = {
+      of(value) {
+        return { type, value };
       },
     };
     return type;
@@ -30,7 +40,7 @@ function createSessionHarness(initialText = '') {
   };
   const modules = {
     state: {
-      Annotation: { define: defineEffect },
+      Annotation: { define: defineAnnotation },
       EditorSelection,
       Prec: { highest: (extension) => extension },
       StateEffect: { define: defineEffect },
@@ -40,7 +50,7 @@ function createSessionHarness(initialText = '') {
           return sessionField;
         },
       },
-      Transaction: { addToHistory: { of: (value) => ({ value }) } },
+      Transaction: { addToHistory: defineAnnotation() },
     },
     view: {
       Decoration: {
@@ -52,21 +62,26 @@ function createSessionHarness(initialText = '') {
         baseTheme: (theme) => theme,
         decorations: { from: (...args) => args },
       },
-      ViewPlugin: { fromClass: (plugin) => plugin },
+      ViewPlugin: {
+        fromClass(plugin) {
+          pluginClasses.push(plugin);
+          return plugin;
+        },
+      },
       keymap: { of: (bindings) => bindings },
     },
   };
   const session = createCodeMirrorSnippetSession(modules);
   let fieldValue = sessionField.specification.create();
   let text = initialText;
-  const createDoc = () => ({
-    length: text.length,
-    sliceString: (from, to) => text.slice(from, to),
+  const createDoc = (docText = text) => ({
+    length: docText.length,
+    sliceString: (from, to) => docText.slice(from, to),
   });
-  const createState = (selection) => ({
+  const createState = (selection, fieldSnapshot = fieldValue) => ({
     doc: createDoc(),
     field(field, fallback) {
-      if (field === sessionField) return fieldValue;
+      if (field === sessionField) return fieldSnapshot;
       if (fallback === false) return undefined;
       throw new Error('Unknown state field.');
     },
@@ -76,8 +91,13 @@ function createSessionHarness(initialText = '') {
   const view = {
     state: createState(EditorSelection.create([initialRange])),
     dispatch(specification) {
+      dispatches.push(specification);
+      const startState = view.state;
       const effects = specification.effects
         ? [].concat(specification.effects)
+        : [];
+      const annotations = specification.annotations
+        ? [].concat(specification.annotations)
         : [];
       const changes = specification.changes
         ? [].concat(specification.changes)
@@ -104,6 +124,12 @@ function createSessionHarness(initialText = '') {
         }
         return position + delta;
       };
+      const mappedSelection = EditorSelection.create(
+        startState.selection.ranges.map((range) => EditorSelection.range(
+          mapPos(range.from, -1),
+          mapPos(range.to, 1),
+        )),
+      );
       const nextSelection = specification.selection?.ranges
         ? specification.selection
         : specification.selection?.anchor != null
@@ -113,9 +139,11 @@ function createSessionHarness(initialText = '') {
               specification.selection.head ?? specification.selection.anchor,
             ),
           ])
-          : view.state.selection;
+          : mappedSelection;
       const transaction = {
-        annotation: () => undefined,
+        annotation(type) {
+          return annotations.find((annotation) => annotation.type === type)?.value;
+        },
         changes: {
           iterChangedRanges(callback) {
             for (const change of orderedChanges) {
@@ -128,6 +156,7 @@ function createSessionHarness(initialText = '') {
         effects,
         newSelection: nextSelection,
         selection: specification.selection != null,
+        startState,
       };
 
       fieldValue = sessionField.specification.update(fieldValue, transaction);
@@ -135,11 +164,31 @@ function createSessionHarness(initialText = '') {
         text = text.slice(0, change.from) + String(change.insert || '') +
           text.slice(change.to);
       }
-      view.state = createState(nextSelection);
+      view.state = createState(nextSelection, fieldValue);
+      transaction.state = view.state;
+      const update = {
+        docChanged: transaction.docChanged,
+        startState,
+        state: view.state,
+        transactions: [transaction],
+        view,
+      };
+      for (const plugin of plugins) plugin.update(update);
     },
   };
+  const plugins = pluginClasses.map((Plugin) => new Plugin(view));
+  const flushSynchronization = async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  };
 
-  return { EditorSelection, session, view };
+  return {
+    dispatches,
+    EditorSelection,
+    flushSynchronization,
+    session,
+    view,
+  };
 }
 
 test('merges mirrored fields and final cursors across multiple selections', () => {
@@ -239,4 +288,162 @@ test('uses explicit $0 and keeps final cursors for every selection', () => {
     [4, 9],
   );
   assert.equal(placeholderFree.session.getSession(placeholderFree.view.state), null);
+});
+
+test('keeps ordinary mirrors synchronized when either occurrence is edited', async () => {
+  const harness = createSessionHarness();
+  const { EditorSelection, session, view } = harness;
+  const compiled = compileSnippetTemplate('${1:name} = $1; $0');
+
+  session.insert(view, [{ from: 0, to: 0, compiled }]);
+  let group = session.getSession(view.state).groups[0];
+  view.dispatch({
+    changes: { ...group.ranges[0], insert: 'value' },
+    selection: EditorSelection.create([EditorSelection.range(5, 5)]),
+  });
+  await harness.flushSynchronization();
+  assert.equal(view.state.doc.sliceString(0, view.state.doc.length), 'value = value; ');
+  assert.ok(session.getSession(view.state));
+
+  group = session.getSession(view.state).groups[0];
+  const mirror = group.ranges[1];
+  view.dispatch({
+    changes: { from: mirror.from, to: mirror.to, insert: 'result' },
+    selection: EditorSelection.create([
+      EditorSelection.range(mirror.from + 6, mirror.from + 6),
+    ]),
+  });
+  await harness.flushSynchronization();
+  assert.equal(view.state.doc.sliceString(0, view.state.doc.length), 'result = result; ');
+  assert.ok(session.getSession(view.state));
+  assert.ok(harness.dispatches.at(-1).annotations.some(
+    (annotation) => annotation.value === false,
+  ));
+});
+
+test('does not duplicate immediate multi-selection mirror edits', async () => {
+  const harness = createSessionHarness();
+  const { session, view } = harness;
+  const compiled = compileSnippetTemplate('${1:name} = $1');
+
+  session.insert(view, [{ from: 0, to: 0, compiled }]);
+  const ranges = session.getSession(view.state).groups[0].ranges;
+  view.dispatch({
+    changes: ranges.map(({ from, to }) => ({ from, to, insert: 'item' })),
+  });
+  const dispatchCount = harness.dispatches.length;
+  await harness.flushSynchronization();
+
+  assert.equal(view.state.doc.sliceString(0, view.state.doc.length), 'item = item');
+  assert.equal(harness.dispatches.length, dispatchCount);
+});
+
+test('keeps mirrored values independent across separate snippet insertions', async () => {
+  const harness = createSessionHarness('x x');
+  const { EditorSelection, session, view } = harness;
+  const compiled = compileSnippetTemplate('${1:left} = $1');
+
+  session.insert(view, [
+    { from: 0, to: 1, compiled },
+    { from: 2, to: 3, compiled },
+  ]);
+  let group = session.getSession(view.state).groups[0];
+  assert.deepEqual(
+    [...new Set(group.ranges.map(({ insertionId }) => insertionId))],
+    [0, 1],
+  );
+  const firstMirror = group.ranges.find(
+    ({ insertionId, occurrenceId }) => insertionId === 0 && occurrenceId === 1,
+  );
+  view.dispatch({
+    changes: { from: firstMirror.from, to: firstMirror.to, insert: 'one' },
+    selection: EditorSelection.create([
+      EditorSelection.range(firstMirror.from + 3, firstMirror.from + 3),
+    ]),
+  });
+  await harness.flushSynchronization();
+
+  group = session.getSession(view.state).groups[0];
+  const values = (insertionId) => group.ranges
+    .filter((range) => range.insertionId === insertionId)
+    .map((range) => view.state.doc.sliceString(range.from, range.to));
+  assert.deepEqual(values(0), ['one', 'one']);
+  assert.deepEqual(values(1), ['left', 'left']);
+});
+
+test('updates ordinary and transformed mirrors from the edited occurrence', async () => {
+  const harness = createSessionHarness();
+  const { EditorSelection, session, view } = harness;
+  const compiled = compileSnippetTemplate(
+    '${1:name} = $1 ${1/(.*)/${1:/upcase}/}',
+  );
+
+  session.insert(view, [{ from: 0, to: 0, compiled }]);
+  const mirror = session.getSession(view.state).groups[0].ranges[1];
+  view.dispatch({
+    changes: { from: mirror.from, to: mirror.to, insert: 'item' },
+    selection: EditorSelection.create([
+      EditorSelection.range(mirror.from + 4, mirror.from + 4),
+    ]),
+  });
+  await harness.flushSynchronization();
+
+  assert.equal(view.state.doc.sliceString(0, view.state.doc.length), 'item = item ITEM');
+});
+
+test('keeps choice replacement synchronized through final-cursor navigation', async () => {
+  const harness = createSessionHarness();
+  const { session, view } = harness;
+  const compiled = compileSnippetTemplate('${1|one,two|} = $1$0');
+
+  session.insert(view, [{ from: 0, to: 0, compiled }]);
+  assert.deepEqual(session.activeGroup(view.state).choices, ['one', 'two']);
+  assert.equal(session.replaceActiveChoice(view, 'two'), true);
+  await harness.flushSynchronization();
+
+  assert.equal(view.state.doc.sliceString(0, view.state.doc.length), 'two = two');
+  assert.equal(session.navigate(view, 1), true);
+  assert.deepEqual(view.state.selection.ranges.map(({ head }) => head), [9]);
+  assert.equal(session.getSession(view.state), null);
+});
+
+test('synchronizes nested fields inside-out without ending navigation', async () => {
+  const harness = createSessionHarness();
+  const { EditorSelection, session, view } = harness;
+  const compiled = compileSnippetTemplate(
+    '${1:outer ${2:inner}} | $1 | $2$0',
+  );
+
+  session.insert(view, [{ from: 0, to: 0, compiled }]);
+  assert.equal(session.navigate(view, 1), true);
+  const inner = session.getSession(view.state).groups[1].ranges[0];
+  view.dispatch({
+    changes: { from: inner.from, to: inner.to, insert: 'child' },
+    selection: EditorSelection.create([
+      EditorSelection.range(inner.from + 5, inner.from + 5),
+    ]),
+  });
+  await harness.flushSynchronization();
+
+  assert.equal(
+    view.state.doc.sliceString(0, view.state.doc.length),
+    'outer child | outer child | child',
+  );
+  assert.ok(session.getSession(view.state));
+  assert.equal(session.navigate(view, 1), true);
+  assert.equal(session.getSession(view.state), null);
+  assert.equal(session.navigate(view, 1), false);
+});
+
+test('cancels the session for edits outside the active placeholder', async () => {
+  const harness = createSessionHarness();
+  const { session, view } = harness;
+  const compiled = compileSnippetTemplate('${1:name} tail');
+
+  session.insert(view, [{ from: 0, to: 0, compiled }]);
+  view.dispatch({ changes: { from: 5, to: 5, insert: '!' } });
+  await harness.flushSynchronization();
+
+  assert.equal(session.getSession(view.state), null);
+  assert.equal(view.state.doc.sliceString(0, view.state.doc.length), 'name !tail');
 });

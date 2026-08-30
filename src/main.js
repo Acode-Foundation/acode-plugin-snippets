@@ -27,6 +27,31 @@ const DEFAULT_FILE_ICON = 'file file_type_default';
 const FILE_ICON_SCOPE_ALIASES = Object.freeze({
   c_cpp: 'cpp',
 });
+const CODEMIRROR_EDITOR_EVENTS = Object.freeze([
+  'switch-file',
+  'file-loaded',
+  'new-file',
+  'rename-file',
+  'editor-state-changed',
+  'update:read-only',
+]);
+const CODEMIRROR_INTERACTION_EVENTS = Object.freeze([
+  'focusin',
+  'pointerdown',
+  'beforeinput',
+]);
+const RECONCILE_DELAYS = Object.freeze([0, 50, 250]);
+const SCOPE_RETRY_DELAYS = Object.freeze([0, 50, 200]);
+const SCOPE_FAILURE_COOLDOWN = 5000;
+const EMPTY_SCOPE_RESULT = Object.freeze({ snippets: [], unsupported: [] });
+
+function isMissingSnippetError(error) {
+  const code = String(error?.code || '').toUpperCase();
+  const status = Number(error?.status || error?.statusCode || 0);
+  const message = String(error?.message || error || '');
+  return code === 'ENOENT' || status === 404 ||
+    /(?:missing file|not found|does not exist|no such file|\b404\b)/i.test(message);
+}
 
 class AceSnippetsAdapter {
   constructor(host) {
@@ -166,21 +191,34 @@ class AceSnippetsAdapter {
 class CodeMirrorSnippetsAdapter {
   constructor(host) {
     this.host = host;
-    this.cache = new SnippetCache((scope) => this.loadScope(scope));
+    this.cache = new SnippetCache(
+      (scope) => this.loadScope(scope),
+      { failureCooldown: SCOPE_FAILURE_COOLDOWN },
+    );
     this.warnedScopes = new Set();
+    this.failedScopes = new Set();
     this.destroyed = false;
-    this.refreshTimer = null;
+    this.installedViews = new Set();
+    this.pendingTabs = new Map();
+    this.reconcileTimers = new Map();
+    this.retryWaits = new Map();
     this.completionSource = this.getCompletions.bind(this);
-    this.handleEditorChange = this.scheduleRefresh.bind(this);
+    this.handleEditorChange = this.scheduleReconcile.bind(this);
+    this.handleSettingsUpdate = this.scheduleReconcile.bind(this);
+    this.handleInteraction = this.onInteraction.bind(this);
+    this.handleKeyDown = this.onKeyDown.bind(this);
   }
 
   async init() {
     const autocomplete = acode.require('@codemirror/autocomplete');
+    const commands = acode.require('@codemirror/commands');
     const state = acode.require('@codemirror/state');
     const view = acode.require('@codemirror/view');
     const language = acode.require('@codemirror/language');
     if (
+      !autocomplete?.acceptCompletion ||
       !autocomplete?.startCompletion ||
+      !commands?.indentMore ||
       !state?.Compartment ||
       !state?.EditorState ||
       !state?.StateEffect ||
@@ -193,7 +231,9 @@ class CodeMirrorSnippetsAdapter {
       throw new Error('CodeMirror snippets API is unavailable.');
     }
 
+    this.acceptCompletion = autocomplete.acceptCompletion;
     this.startCompletion = autocomplete.startCompletion;
+    this.indentMore = commands.indentMore;
     this.EditorState = state.EditorState;
     this.StateEffect = state.StateEffect;
     this.syntaxTree = language.syntaxTree;
@@ -202,7 +242,7 @@ class CodeMirrorSnippetsAdapter {
       { state, view },
       {
         startCompletion: this.startCompletion,
-        tab: (editorView) => this.expandWithTab(editorView),
+        tab: (editorView) => this.handleTabCommand(editorView),
       },
     );
     this.compartment = new state.Compartment();
@@ -213,35 +253,55 @@ class CodeMirrorSnippetsAdapter {
       this.session.extension,
     ];
 
-    editorManager.on(
-      ['switch-file', 'file-loaded', 'new-file'],
-      this.handleEditorChange,
-    );
+    editorManager.on(CODEMIRROR_EDITOR_EVENTS, this.handleEditorChange);
+    appSettings.on?.('update:after', this.handleSettingsUpdate);
+    for (const eventName of CODEMIRROR_INTERACTION_EVENTS) {
+      document.addEventListener?.(eventName, this.handleInteraction, true);
+    }
+    document.addEventListener?.('keydown', this.handleKeyDown, true);
     editorManager.editor.commands.addCommand({
       name: 'expandSnippet',
       description: 'Expand snippet',
-      exec: (view) => this.expandWithTab(view),
+      exec: (view) => this.handleTabCommand(view),
       bindKey: { win: 'Tab' },
     });
 
-    this.installInVisibleEditors();
+    this.reconcileEditors();
     await this.preloadVisibleFiles();
   }
 
   async destroy() {
     this.destroyed = true;
-    clearTimeout(this.refreshTimer);
-    editorManager.off(
-      ['switch-file', 'file-loaded', 'new-file'],
-      this.handleEditorChange,
-    );
+    for (const timer of this.reconcileTimers.values()) clearTimeout(timer);
+    this.reconcileTimers.clear();
+    this.pendingTabs.clear();
+    for (const [timer, resolve] of this.retryWaits) {
+      clearTimeout(timer);
+      resolve();
+    }
+    this.retryWaits.clear();
+    editorManager.off(CODEMIRROR_EDITOR_EVENTS, this.handleEditorChange);
+    appSettings.off?.('update:after', this.handleSettingsUpdate);
+    for (const eventName of CODEMIRROR_INTERACTION_EVENTS) {
+      document.removeEventListener?.(eventName, this.handleInteraction, true);
+    }
+    document.removeEventListener?.('keydown', this.handleKeyDown, true);
     editorManager.editor.commands.removeCommand('expandSnippet');
 
-    for (const view of this.getVisibleEditors()) {
+    const installedViews = new Set([
+      ...this.installedViews,
+      ...this.getVisibleEditors(),
+    ]);
+    for (const view of installedViews) {
       if (this.compartment.get(view.state) === undefined) continue;
-      view.dispatch({ effects: this.compartment.reconfigure([]) });
-      this.syncFileSession(view);
+      try {
+        view.dispatch({ effects: this.compartment.reconfigure([]) });
+        this.syncFileSession(view);
+      } catch {
+        // A removed split pane may already have destroyed its EditorView.
+      }
     }
+    this.installedViews.clear();
 
     for (const file of editorManager.files || []) {
       if (file?.type !== 'editor') continue;
@@ -253,48 +313,109 @@ class CodeMirrorSnippetsAdapter {
     }
 
     this.cache.clear();
+    this.failedScopes.clear();
     this.session = null;
   }
 
   async refresh() {
+    this.pendingTabs.clear();
     this.cache.clear();
     this.warnedScopes.clear();
-    this.installInVisibleEditors();
+    this.failedScopes.clear();
+    this.reconcileEditors();
     await this.preloadVisibleFiles();
   }
 
-  scheduleRefresh() {
-    clearTimeout(this.refreshTimer);
-    this.refreshTimer = setTimeout(() => {
-      if (this.destroyed) return;
-      this.installInVisibleEditors();
-      void this.preloadVisibleFiles();
-    }, 0);
+  scheduleReconcile(candidate) {
+    this.reconcileEditors(candidate);
+    for (const milliseconds of RECONCILE_DELAYS) {
+      clearTimeout(this.reconcileTimers.get(milliseconds));
+      const timer = setTimeout(() => {
+        this.reconcileTimers.delete(milliseconds);
+        if (this.destroyed) return;
+        this.reconcileEditors();
+        void this.preloadVisibleFiles();
+      }, milliseconds);
+      this.reconcileTimers.set(milliseconds, timer);
+    }
   }
 
   getVisibleEditors() {
     const panes = editorManager.panes || [];
     const views = panes.map((pane) => pane?.editor).filter(Boolean);
-    if (!views.length && editorManager.editor) views.push(editorManager.editor);
+    if (editorManager.editor) views.push(editorManager.editor);
     return [...new Set(views)];
   }
 
-  installInVisibleEditors() {
+  reconcileEditors(candidate) {
+    if (candidate?.state) this.installInEditor(candidate);
     for (const view of this.getVisibleEditors()) {
       this.installInEditor(view);
     }
   }
 
-  installInEditor(view) {
+  getViewForEvent(event) {
+    const path = typeof event?.composedPath === 'function'
+      ? event.composedPath()
+      : [event?.target];
+    return this.getVisibleEditors().find((view) => path.some((element) => (
+      element && (
+        element === view.dom ||
+        element === view.contentDOM ||
+        (
+          typeof element.nodeType === 'number' &&
+          view.dom?.contains?.(element)
+        )
+      )
+    ))) || null;
+  }
+
+  onInteraction(event) {
+    const view = this.getViewForEvent(event);
+    if (!view) return;
+    this.installInEditor(view);
+    void this.preloadView(view);
+  }
+
+  onKeyDown(event) {
     if (
-      !view?.state ||
-      this.compartment.get(view.state) !== undefined
-    ) return false;
+      event?.key !== 'Tab' ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey
+    ) return;
+
+    const view = this.getViewForEvent(event);
+    if (!view) return;
+    this.installInEditor(view);
+
+    let handled = false;
+    if (event.shiftKey) {
+      if (this.session?.getSession(view.state)) {
+        handled = this.session.navigate(view, -1);
+      }
+    } else {
+      handled = this.handleTabCommand(view);
+    }
+    if (!handled) return;
+
+    event.preventDefault?.();
+    event.stopImmediatePropagation?.();
+    event.stopPropagation?.();
+  }
+
+  installInEditor(view) {
+    if (!view?.state) return false;
+    if (this.compartment.get(view.state) !== undefined) {
+      this.installedViews.add(view);
+      return false;
+    }
     view.dispatch({
       effects: this.StateEffect.appendConfig.of(
         this.compartment.of(this.extension),
       ),
     });
+    this.installedViews.add(view);
     this.syncFileSession(view);
     return true;
   }
@@ -320,10 +441,36 @@ class CodeMirrorSnippetsAdapter {
 
   async loadScope(scope) {
     let text = '';
-    try {
-      text = await this.host.readSnippetScope(scope);
-    } catch {
-      return { snippets: [], unsupported: [] };
+    let lastError = null;
+    for (let attempt = 0; attempt < SCOPE_RETRY_DELAYS.length; attempt += 1) {
+      this.throwIfDestroyed();
+      const wait = SCOPE_RETRY_DELAYS[attempt];
+      if (wait) await this.waitForRetry(wait);
+      this.throwIfDestroyed();
+      try {
+        text = await this.host.readSnippetScope(scope);
+        this.throwIfDestroyed();
+        lastError = null;
+        break;
+      } catch (error) {
+        if (error?.name === 'AbortError') throw error;
+        if (isMissingSnippetError(error)) return EMPTY_SCOPE_RESULT;
+        lastError = error;
+      }
+    }
+    if (lastError) {
+      if (!this.failedScopes.has(scope)) {
+        this.failedScopes.add(scope);
+        console.error(
+          `[Snippets] Unable to load ${scope}.snippets after ` +
+          `${SCOPE_RETRY_DELAYS.length} attempts.`,
+          lastError,
+        );
+      }
+      throw lastError;
+    }
+    if (this.failedScopes.delete(scope)) {
+      console.info(`[Snippets] Recovered ${scope}.snippets.`);
     }
 
     const parsed = parseSnippetFile(text, scope);
@@ -336,6 +483,23 @@ class CodeMirrorSnippetsAdapter {
       );
     }
     return parsed;
+  }
+
+  throwIfDestroyed() {
+    if (!this.destroyed) return;
+    const error = new Error('Snippet adapter was destroyed.');
+    error.name = 'AbortError';
+    throw error;
+  }
+
+  waitForRetry(milliseconds) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.retryWaits.delete(timer);
+        resolve();
+      }, milliseconds);
+      this.retryWaits.set(timer, resolve);
+    });
   }
 
   getSyntaxNodeNames(state, position) {
@@ -371,7 +535,13 @@ class CodeMirrorSnippetsAdapter {
     const scopes = this.getScopes(file, state, position, preload);
     if (!scopes.length) return [];
     const results = await Promise.all(
-      scopes.map((scope) => this.cache.getOrLoad(scope)),
+      scopes.map(async (scope) => {
+        try {
+          return await this.cache.getOrLoad(scope);
+        } catch {
+          return EMPTY_SCOPE_RESULT;
+        }
+      }),
     );
     return this.collectSnippets(scopes, results);
   }
@@ -397,17 +567,21 @@ class CodeMirrorSnippetsAdapter {
   }
 
   async preloadVisibleFiles() {
-    await Promise.all(this.getVisibleEditors().map((view) => {
-      const file = this.getFileForState(view.state);
-      return file?.type === 'editor'
-        ? this.getSnippetsForPosition(
-          file,
-          view.state,
-          view.state.selection.main.head,
-          true,
-        )
-        : Promise.resolve([]);
-    }));
+    await Promise.all(this.getVisibleEditors().map((view) => (
+      this.preloadView(view)
+    )));
+  }
+
+  preloadView(view) {
+    const file = this.getFileForState(view?.state);
+    return file?.type === 'editor'
+      ? this.getSnippetsForPosition(
+        file,
+        view.state,
+        view.state.selection.main.head,
+        true,
+      )
+      : Promise.resolve([]);
   }
 
   getTabString(state) {
@@ -455,6 +629,7 @@ class CodeMirrorSnippetsAdapter {
   async getCompletions(context) {
     const choices = this.getChoiceCompletions(context);
     if (choices) return choices;
+    if (!this.host.showInAutocomplete) return null;
     if (this.session?.getSession(context.state)) return null;
     const file = this.getFileForState(context.state);
     if (file?.type !== 'editor') return null;
@@ -528,6 +703,109 @@ class CodeMirrorSnippetsAdapter {
     return this.session.insert(view, insertions);
   }
 
+  getUnreadyScopes(view) {
+    const file = this.getFileForState(view?.state);
+    if (file?.type !== 'editor') return [];
+    const scopes = new Set();
+    for (const selection of view.state.selection.ranges) {
+      for (const scope of this.getScopes(
+        file,
+        view.state,
+        selection.head,
+        true,
+      )) scopes.add(scope);
+    }
+    return [...scopes].filter(
+      (scope) => this.cache.getStatus(scope) !== 'loaded',
+    );
+  }
+
+  hasPotentialTabTrigger(view) {
+    return view.state.selection.ranges.some((selection) => {
+      const line = view.state.doc.lineAt(selection.head);
+      return line.text.length > 0;
+    });
+  }
+
+  captureTabSnapshot(view) {
+    return {
+      doc: view.state.doc,
+      file: this.getFileForState(view.state),
+      selections: view.state.selection.ranges.map((range) => ({
+        anchor: range.anchor ?? range.from,
+        head: range.head ?? range.to,
+      })),
+    };
+  }
+
+  isTabSnapshotCurrent(view, snapshot) {
+    if (!view?.state || this.getFileForState(view.state) !== snapshot.file) {
+      return false;
+    }
+    const sameDocument = view.state.doc === snapshot.doc ||
+      view.state.doc.eq?.(snapshot.doc);
+    if (!sameDocument) return false;
+    const ranges = view.state.selection.ranges;
+    return ranges.length === snapshot.selections.length && ranges.every(
+      (range, index) => (
+        (range.anchor ?? range.from) === snapshot.selections[index].anchor &&
+        (range.head ?? range.to) === snapshot.selections[index].head
+      ),
+    );
+  }
+
+  async preloadTabScopes(view) {
+    const file = this.getFileForState(view?.state);
+    if (file?.type !== 'editor') return;
+    await Promise.all(view.state.selection.ranges.map((selection) => (
+      this.getSnippetsForPosition(
+        file,
+        view.state,
+        selection.head,
+        true,
+      )
+    )));
+  }
+
+  runNativeTab(view) {
+    if (this.acceptCompletion?.(view)) return true;
+    if (typeof view.execCommand === 'function' && view.execCommand('indent')) {
+      return true;
+    }
+    return this.indentMore?.(view) || false;
+  }
+
+  queueTab(view) {
+    if (this.pendingTabs.has(view)) return true;
+    const snapshot = this.captureTabSnapshot(view);
+    const pending = {};
+    this.pendingTabs.set(view, pending);
+    void this.preloadTabScopes(view).then(() => {
+      if (this.pendingTabs.get(view) !== pending) return;
+      this.pendingTabs.delete(view);
+      if (this.destroyed || !this.isTabSnapshotCurrent(view, snapshot)) return;
+      if (!this.expandWithTab(view)) this.runNativeTab(view);
+    }).catch(() => {
+      if (this.pendingTabs.get(view) !== pending) return;
+      this.pendingTabs.delete(view);
+      if (!this.destroyed && this.isTabSnapshotCurrent(view, snapshot)) {
+        this.runNativeTab(view);
+      }
+    });
+    return true;
+  }
+
+  handleTabCommand(view) {
+    if (this.expandWithTab(view)) return true;
+    if (
+      !view?.state ||
+      view.state.readOnly ||
+      !this.hasPotentialTabTrigger(view) ||
+      !this.getUnreadyScopes(view).length
+    ) return false;
+    return this.queueTab(view);
+  }
+
   expandWithTab(view) {
     if (!view?.state || view.state.readOnly) return false;
     this.installInEditor(view);
@@ -561,10 +839,7 @@ class CodeMirrorSnippetsAdapter {
         to: line.from + match.to,
       });
     }
-    if (!insertions.length) {
-      void this.getSnippetsForPosition(file, view.state, view.state.selection.main.head, true);
-      return false;
-    }
+    if (!insertions.length) return false;
     return this.session.insert(view, insertions);
   }
 }
@@ -583,7 +858,7 @@ class AcodeSnippets {
       pluginId,
     );
     this.baseUrl = baseUrl;
-    this.#registerFileIcon(baseUrl);
+    this.#registerIconStyles(baseUrl);
     if (editorManager.isCodeMirror) {
       this.#registerSnippetsLanguage();
     }
@@ -613,7 +888,7 @@ class AcodeSnippets {
     }
   }
 
-  #registerFileIcon(baseUrl) {
+  #registerIconStyles(baseUrl) {
     this.#iconStyle?.remove();
     this.#iconStyle = document.createElement('style');
     const iconUrl = this.joinUrl(baseUrl, 'icon.png');
@@ -625,7 +900,18 @@ class AcodeSnippets {
       'height: 1em;' +
       `background: url("${iconUrl}") no-repeat center / contain;` +
       'vertical-align: middle;' +
-      '}';
+      '}' +
+      (editorManager.isCodeMirror
+        ? '.cm-tooltip.cm-tooltip-autocomplete ' +
+          '.cm-completionIcon.cm-completionIcon-snippet {' +
+          'width: 1rem;' +
+          'height: 1rem;' +
+          'min-width: 1rem;' +
+          'padding-right: 0.25rem;' +
+          'opacity: 1;' +
+          `background: url("${iconUrl}") no-repeat center / contain;` +
+          '}'
+        : '');
     document.head.appendChild(this.#iconStyle);
   }
 
@@ -733,6 +1019,10 @@ class AcodeSnippets {
     return normalizeModeMappings(byLocation[this.#getModeMappingsLocationKey()]);
   }
 
+  get showInAutocomplete() {
+    return this.#getPluginSettings().showInAutocomplete !== false;
+  }
+
   joinUrl(path1, path2) {
     if ('joinUrl' in acode) return acode.joinUrl(path1, path2);
     return `${String(path1).replace(/\/+$/, '')}/${String(path2).replace(/^\/+/, '')}`;
@@ -761,6 +1051,14 @@ class AcodeSnippets {
     };
     appSettings.update();
     this.#updateSettingsDisplays();
+  }
+
+  #saveShowInAutocomplete(value) {
+    appSettings.value[pluginId] = {
+      ...this.#getPluginSettings(),
+      showInAutocomplete: value !== false,
+    };
+    appSettings.update();
   }
 
   #getSnippetLocation() {
@@ -1177,9 +1475,11 @@ class AcodeSnippets {
     }
   }
 
-  onSettingsChange(key) {
+  onSettingsChange(key, value) {
     if (key === 'setSnippetsDirectory') {
       void this.#setSnippetPath();
+    } else if (key === 'showInAutocomplete' && editorManager.isCodeMirror) {
+      this.#saveShowInAutocomplete(value);
     } else if (key === 'languageMappings' && editorManager.isCodeMirror) {
       void this.#openLanguageMappings();
     } else if (key === 'resetSnippetsDirectory') {
@@ -1196,6 +1496,12 @@ class AcodeSnippets {
       },
     ];
     if (editorManager.isCodeMirror) {
+      list.push({
+        key: 'showInAutocomplete',
+        text: 'Autocomplete suggestions',
+        info: 'Show snippets in the completion list.',
+        checkbox: this.showInAutocomplete,
+      });
       list.push({
         key: 'languageMappings',
         text: 'Language mappings',

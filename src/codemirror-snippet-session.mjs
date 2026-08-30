@@ -50,7 +50,7 @@ export function buildSnippetInsertion(insertions) {
   const finalRanges = [];
   let delta = 0;
 
-  for (const insertion of ordered) {
+  for (const [insertionId, insertion] of ordered.entries()) {
     changes.push({
       from: insertion.from,
       to: insertion.to,
@@ -78,14 +78,18 @@ export function buildSnippetInsertion(insertions) {
         ranges: [],
         transforms: [],
       };
-      group.ranges.push(...compiledField.ranges.map((range) => ({
+      group.ranges.push(...compiledField.ranges.map((range, occurrenceId) => ({
         from: start + range.from,
         to: start + range.to,
+        insertionId,
+        occurrenceId,
       })));
-      group.transforms.push(...compiledField.transforms.map((range) => ({
+      group.transforms.push(...compiledField.transforms.map((range, transformId) => ({
         ...range,
         from: start + range.from,
         to: start + range.to,
+        insertionId,
+        transformId,
       })));
       groups.set(compiledField.id, group);
     }
@@ -141,6 +145,12 @@ export function createCodeMirrorSnippetSession(modules, callbacks = {}) {
     ? { ...session, decorations: createDecorations(session) }
     : null;
 
+  const insertionIdOf = (range) => range.insertionId ?? 0;
+  const occurrenceIdOf = (range, fallback) => range.occurrenceId ?? fallback;
+  const targetKey = ({ groupId, insertionId }) => (
+    `${groupId}\u0000${insertionId}`
+  );
+
   const sessionField = StateField.define({
     create() {
       return null;
@@ -191,17 +201,110 @@ export function createCodeMirrorSnippetSession(modules, callbacks = {}) {
     ),
   });
 
-  const syncTransforms = (view) => {
-    const session = view.state.field(sessionField, false);
-    if (!session) return;
-    const changes = [];
+  const collectEditedTargets = (transaction) => {
+    if (!transaction.docChanged || transaction.annotation(synchronizing)) {
+      return [];
+    }
+    const before = transaction.startState?.field(sessionField, false);
+    const after = transaction.state?.field(sessionField, false);
+    if (!before || !after) return [];
+
+    const changedRanges = [];
+    transaction.changes.iterChangedRanges((from, to) => {
+      changedRanges.push({ from, to });
+    });
+    if (!changedRanges.length) return [];
+
+    const mainHead = transaction.newSelection?.main?.head;
+    const targets = new Map();
+    for (const group of before.groups) {
+      group.ranges.forEach((range, index) => {
+        if (!changedRanges.some(({ from, to }) => (
+          from >= range.from && to <= range.to
+        ))) return;
+        const target = {
+          groupId: group.id,
+          insertionId: insertionIdOf(range),
+          occurrenceId: occurrenceIdOf(range, index),
+        };
+        const key = targetKey(target);
+        const mapped = mapRange(range, transaction.changes);
+        const containsMain = Number.isFinite(mainHead) &&
+          mainHead >= mapped.from && mainHead <= mapped.to;
+        const previous = targets.get(key);
+        if (!previous || containsMain) {
+          targets.set(key, { ...target, containsMain });
+        }
+      });
+    }
+    return [...targets.values()].map(({ containsMain, ...target }) => target);
+  };
+
+  const allInstanceTargets = (session) => {
+    const targets = new Map();
     for (const group of session.groups) {
-      if (!group.transforms.length || !group.ranges.length) continue;
-      const source = view.state.doc.sliceString(
-        group.ranges[0].from,
-        group.ranges[0].to,
+      group.ranges.forEach((range, index) => {
+        const target = {
+          groupId: group.id,
+          insertionId: insertionIdOf(range),
+          occurrenceId: occurrenceIdOf(range, index),
+        };
+        const key = targetKey(target);
+        if (!targets.has(key)) targets.set(key, target);
+      });
+    }
+    return [...targets.values()];
+  };
+
+  const synchronize = (view, requestedTargets) => {
+    const session = view.state.field(sessionField, false);
+    if (!session) return false;
+    const targets = (requestedTargets?.length
+      ? requestedTargets
+      : allInstanceTargets(session))
+      .map((target) => {
+        const group = session.groups.find(({ id }) => id === target.groupId);
+        const ranges = group?.ranges.filter(
+          (range) => insertionIdOf(range) === target.insertionId,
+        ) || [];
+        const source = ranges.find((range, index) => (
+          occurrenceIdOf(range, index) === target.occurrenceId
+        )) || ranges[0];
+        return source ? {
+          ...target,
+          sourceLength: source.to - source.from,
+        } : null;
+      })
+      .filter(Boolean)
+      .sort((left, right) => left.sourceLength - right.sourceLength);
+
+    let dispatched = false;
+    for (const target of targets) {
+      const currentSession = view.state.field(sessionField, false);
+      if (!currentSession) break;
+      const group = currentSession.groups.find(
+        ({ id }) => id === target.groupId,
       );
-      for (const transform of group.transforms) {
+      if (!group) continue;
+      const ranges = group.ranges.filter(
+        (range) => insertionIdOf(range) === target.insertionId,
+      );
+      const sourceRange = ranges.find((range, index) => (
+        occurrenceIdOf(range, index) === target.occurrenceId
+      )) || ranges[0];
+      if (!sourceRange) continue;
+      const source = view.state.doc.sliceString(sourceRange.from, sourceRange.to);
+      const changes = [];
+      for (const range of ranges) {
+        if (range === sourceRange) continue;
+        const current = view.state.doc.sliceString(range.from, range.to);
+        if (current !== source) {
+          changes.push({ from: range.from, to: range.to, insert: source });
+        }
+      }
+      for (const transform of group.transforms.filter(
+        (range) => insertionIdOf(range) === target.insertionId,
+      )) {
         const replacement = applySnippetTransform(source, transform);
         const current = view.state.doc.sliceString(transform.from, transform.to);
         if (replacement !== current) {
@@ -212,21 +315,27 @@ export function createCodeMirrorSnippetSession(modules, callbacks = {}) {
           });
         }
       }
+      if (!changes.length) continue;
+      changes.sort((left, right) => left.from - right.from || left.to - right.to);
+      view.dispatch({
+        changes,
+        annotations: [
+          synchronizing.of(true),
+          Transaction.addToHistory.of(false),
+        ],
+      });
+      dispatched = true;
     }
-    if (!changes.length) return;
-    view.dispatch({
-      changes,
-      annotations: [
-        synchronizing.of(true),
-        Transaction.addToHistory.of(false),
-      ],
-    });
+    return dispatched;
   };
+
+  const syncTransforms = (view) => synchronize(view);
 
   const transformPlugin = ViewPlugin.fromClass(class {
     constructor(view) {
       this.view = view;
       this.pending = false;
+      this.pendingTargets = new Map();
       this.destroyed = false;
     }
 
@@ -234,16 +343,26 @@ export function createCodeMirrorSnippetSession(modules, callbacks = {}) {
       if (!update.docChanged || update.transactions.some(
         (transaction) => transaction.annotation(synchronizing),
       )) return;
+      for (const transaction of update.transactions) {
+        for (const target of collectEditedTargets(transaction)) {
+          this.pendingTargets.set(targetKey(target), target);
+        }
+      }
+      if (!this.pendingTargets.size) return;
       if (this.pending) return;
       this.pending = true;
       Promise.resolve().then(() => {
         this.pending = false;
-        if (!this.destroyed) syncTransforms(this.view);
+        if (this.destroyed) return;
+        const targets = [...this.pendingTargets.values()];
+        this.pendingTargets.clear();
+        synchronize(this.view, targets);
       });
     }
 
     destroy() {
       this.destroyed = true;
+      this.pendingTargets.clear();
     }
   });
 

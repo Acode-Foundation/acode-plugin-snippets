@@ -312,6 +312,34 @@ test('deduplicates cache loads and prevents stale results after a clear', async 
   assert.equal(cache.getLoaded('javascript'), null);
 });
 
+test('cools down failed cache loads without poisoning later retries', async () => {
+  let calls = 0;
+  let currentTime = 1000;
+  const failure = new Error('temporary read failure');
+  const cache = new SnippetCache(
+    async () => {
+      calls += 1;
+      if (calls === 1) throw failure;
+      return { snippets: ['recovered'] };
+    },
+    { failureCooldown: 5000, now: () => currentTime },
+  );
+
+  await assert.rejects(cache.getOrLoad('javascript'), failure);
+  assert.equal(cache.getStatus('javascript'), 'failed');
+  await assert.rejects(cache.getOrLoad('javascript'), failure);
+  assert.equal(calls, 1);
+
+  currentTime += 5000;
+  assert.equal(cache.getStatus('javascript'), 'missing');
+  assert.deepEqual(
+    await cache.getOrLoad('javascript'),
+    { snippets: ['recovered'] },
+  );
+  assert.equal(calls, 2);
+  assert.equal(cache.getStatus('javascript'), 'loaded');
+});
+
 test('accepts and compiles all 3,578 packaged snippets, including all 42 JavaScript snippets', () => {
   const snippetDirectory = path.join(repoRoot, 'dist/snippets');
   const files = fs.readdirSync(snippetDirectory)

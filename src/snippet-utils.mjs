@@ -902,21 +902,43 @@ export function findMatchingSnippet(snippets, lineBeforeCursor, lineAfterCursor 
 }
 
 export class SnippetCache {
-  constructor(loader) {
+  constructor(loader, { failureCooldown = 0, now = Date.now } = {}) {
     this.loader = loader;
+    this.failureCooldown = Math.max(0, Number(failureCooldown) || 0);
+    this.now = now;
+    this.failures = new Map();
     this.pending = new Map();
     this.values = new Map();
     this.generation = 0;
   }
 
   getOrLoad(scope) {
+    if (this.values.has(scope)) return Promise.resolve(this.values.get(scope));
     if (this.pending.has(scope)) return this.pending.get(scope);
+    const failure = this.failures.get(scope);
+    if (failure && failure.retryAt > this.now()) {
+      return Promise.reject(failure.error);
+    }
+    if (failure) this.failures.delete(scope);
+
     const generation = this.generation;
     const pending = Promise.resolve()
       .then(() => this.loader(scope))
       .then((value) => {
-        if (generation === this.generation) this.values.set(scope, value);
+        if (generation === this.generation) {
+          this.failures.delete(scope);
+          this.values.set(scope, value);
+        }
         return value;
+      })
+      .catch((error) => {
+        if (generation === this.generation) {
+          this.failures.set(scope, {
+            error,
+            retryAt: this.now() + this.failureCooldown,
+          });
+        }
+        throw error;
       })
       .finally(() => {
         if (this.pending.get(scope) === pending) this.pending.delete(scope);
@@ -929,8 +951,19 @@ export class SnippetCache {
     return this.values.get(scope) || null;
   }
 
+  getStatus(scope) {
+    if (this.values.has(scope)) return 'loaded';
+    if (this.pending.has(scope)) return 'pending';
+    const failure = this.failures.get(scope);
+    if (!failure) return 'missing';
+    if (failure.retryAt > this.now()) return 'failed';
+    this.failures.delete(scope);
+    return 'missing';
+  }
+
   clear() {
     this.generation += 1;
+    this.failures.clear();
     this.pending.clear();
     this.values.clear();
   }

@@ -39,7 +39,12 @@ function createBaseRuntime({
   let settingsList;
   const addedIcons = [];
   const iconStyles = [];
+  const documentListeners = new Map();
   const document = {
+    addEventListener(type, listener) {
+      if (!documentListeners.has(type)) documentListeners.set(type, new Set());
+      documentListeners.get(type).add(listener);
+    },
     createElement(tagName) {
       assert.equal(tagName, 'style');
       return {
@@ -49,6 +54,9 @@ function createBaseRuntime({
           this.removed = true;
         },
       };
+    },
+    removeEventListener(type, listener) {
+      documentListeners.get(type)?.delete(listener);
     },
     head: {
       appendChild(element) {
@@ -114,12 +122,23 @@ function createBaseRuntime({
       }
     },
   };
+  const settingsListeners = new Map();
   const settings = {
     uiSettings: {},
     value: settingsValue,
     updateCalls: 0,
+    on(event, listener) {
+      if (!settingsListeners.has(event)) settingsListeners.set(event, new Set());
+      settingsListeners.get(event).add(listener);
+    },
+    off(event, listener) {
+      settingsListeners.get(event)?.delete(listener);
+    },
     update() {
       this.updateCalls += 1;
+      for (const listener of settingsListeners.get('update:after') || []) {
+        listener();
+      }
     },
   };
   const acode = {
@@ -181,13 +200,21 @@ function createBaseRuntime({
   return {
     addedIcons,
     commandNames,
+    dispatchDocumentEvent(event) {
+      for (const listener of documentListeners.get(event.type) || []) {
+        listener(event);
+      }
+    },
+    documentListenerCount(event) {
+      return documentListeners.get(event)?.size || 0;
+    },
     editor,
     editorManager,
     executeCommand(name, target = editor) {
       return commands.get(name)?.exec(target);
     },
-    emit(event) {
-      for (const listener of listeners.get(event) || []) listener();
+    emit(event, ...args) {
+      for (const listener of listeners.get(event) || []) listener(...args);
     },
     get init() {
       return init;
@@ -285,8 +312,10 @@ class TestCompartment {
 }
 
 function createCodeMirrorModules({
+  acceptCompletion = () => false,
   existingSnippetsLanguage = false,
   fileIcons = {},
+  indentMore = () => false,
 } = {}) {
   const defineEffect = () => {
     const effectType = {
@@ -333,8 +362,10 @@ function createCodeMirrorModules({
     },
     editorLanguages,
     '@codemirror/autocomplete': {
+      acceptCompletion,
       startCompletion: () => true,
     },
+    '@codemirror/commands': { indentMore },
     '@codemirror/language': {
       indentUnit: { of: (value) => ({ indentUnit: value }) },
       LanguageSupport,
@@ -415,7 +446,15 @@ function createState(text = '') {
 }
 
 function createView(state = createState()) {
+  const contentDOM = {};
+  const dom = {
+    contains(element) {
+      return element === dom || element === contentDOM;
+    },
+  };
   return {
+    contentDOM,
+    dom,
     lastDispatch: null,
     dispatch(specification) {
       this.lastDispatch = specification;
@@ -437,6 +476,14 @@ async function flushAsync(iterations = 8) {
   for (let index = 0; index < iterations; index += 1) {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
+}
+
+async function waitForCondition(predicate, iterations = 50) {
+  for (let index = 0; index < iterations; index += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error('Timed out waiting for test condition.');
 }
 
 test('packaged runtime selects CodeMirror without touching Ace', async () => {
@@ -461,6 +508,12 @@ test('packaged runtime selects CodeMirror without touching Ace', async () => {
     runtime.iconStyles[0].textContent,
     /https:\/\/plugins\.local\/snippets\/icon\.png/,
   );
+  assert.match(
+    runtime.iconStyles[0].textContent,
+    /cm-completionIcon\.cm-completionIcon-snippet/,
+  );
+  assert.match(runtime.iconStyles[0].textContent, /width: 1rem/);
+  assert.match(runtime.iconStyles[0].textContent, /opacity: 1/);
   assert.doesNotMatch(runtime.iconStyles[0].textContent, /scale\(/);
   assert.equal(modules.editorLanguages.registerCalls.length, 1);
   const languageRegistration = modules.editorLanguages.registerCalls[0];
@@ -472,6 +525,20 @@ test('packaged runtime selects CodeMirror without touching Ace', async () => {
   assert.equal(languageSupport.support.length, 1);
   assert.equal(languageSupport.support[0].indentUnit, '\t');
   assert.equal(runtime.commandNames.has('expandSnippet'), true);
+  const settingsKeys = runtime.settingsList.map(({ key }) => key);
+  const autocompleteSetting = runtime.settingsList.find(
+    ({ key }) => key === 'showInAutocomplete',
+  );
+  assert.equal(
+    settingsKeys.indexOf('showInAutocomplete'),
+    settingsKeys.indexOf('setSnippetsDirectory') + 1,
+  );
+  assert.equal(autocompleteSetting.checkbox, true);
+  assert.equal(
+    autocompleteSetting.info,
+    'Show snippets in the completion list.',
+  );
+  assert.equal(autocompleteSetting.text, 'Autocomplete suggestions');
   assert.equal(
     runtime.settingsList.some(({ key }) => key === 'languageMappings'),
     true,
@@ -485,7 +552,18 @@ test('packaged runtime selects CodeMirror without touching Ace', async () => {
 
 test('CodeMirror language registration refreshes open snippets without overriding modes', async () => {
   const modules = createCodeMirrorModules();
-  const runtime = createBaseRuntime({ isCodeMirror: true, modules, ace: null });
+  const runtime = createBaseRuntime({
+    isCodeMirror: true,
+    modules,
+    ace: null,
+    fsOperation() {
+      return {
+        async readFile() {
+          throw new Error('Missing file');
+        },
+      };
+    },
+  });
   Object.assign(runtime.editor, createView());
   const modeChanges = [];
   let activeRefreshes = 0;
@@ -715,7 +793,10 @@ test('only genuine uninstall clears saved settings and preserves snippet files',
   let pluginExists = true;
   let deleteCalls = 0;
   const settingsValue = {
-    'acode.plugin.snippets': { snippetLocation: '/custom/snippets' },
+    'acode.plugin.snippets': {
+      showInAutocomplete: false,
+      snippetLocation: '/custom/snippets',
+    },
   };
   const runtime = createBaseRuntime({
     isCodeMirror: true,
@@ -742,6 +823,10 @@ test('only genuine uninstall clears saved settings and preserves snippet files',
   assert.equal(
     runtime.settings.value['acode.plugin.snippets'].snippetLocation,
     '/custom/snippets',
+  );
+  assert.equal(
+    runtime.settings.value['acode.plugin.snippets'].showInAutocomplete,
+    false,
   );
   assert.equal(runtime.settings.updateCalls, 0);
 
@@ -785,7 +870,7 @@ test('uninstall detection failures retain saved settings', async () => {
   assert.equal(runtime.settings.updateCalls, 0);
 });
 
-test('CodeMirror lifecycle covers split panes, file switches, and reinstall cleanup', async () => {
+test('CodeMirror controller repairs recreated states across lifecycle events and input', async () => {
   const runtime = createBaseRuntime({
     isCodeMirror: true,
     modules: createCodeMirrorModules(),
@@ -800,7 +885,17 @@ test('CodeMirror lifecycle covers split panes, file switches, and reinstall clea
   ];
 
   await runtime.init('/plugin/');
-  assert.equal(runtime.listenerCount('switch-file'), 1);
+  for (const event of [
+    'switch-file',
+    'file-loaded',
+    'new-file',
+    'rename-file',
+    'editor-state-changed',
+    'update:read-only',
+  ]) assert.equal(runtime.listenerCount(event), 1);
+  for (const event of ['focusin', 'pointerdown', 'beforeinput', 'keydown']) {
+    assert.equal(runtime.documentListenerCount(event), 1);
+  }
   assert.equal(first.state.compartments.size, 1);
   assert.equal(second.state.compartments.size, 1);
 
@@ -814,26 +909,75 @@ test('CodeMirror lifecycle covers split panes, file switches, and reinstall clea
     editor: third,
     activeFile: { type: 'editor' },
   });
-  runtime.emit('switch-file');
+  runtime.emit('new-file');
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(third.state.compartments.size, 1);
 
-  runtime.editor.state = createState('missing extension after a restored state');
+  runtime.editor.state = createState('restored immediately before input');
   assert.equal(runtime.editor.state.compartments.size, 0);
-  assert.equal(runtime.executeCommand('expandSnippet', runtime.editor), false);
+  runtime.dispatchDocumentEvent({
+    target: runtime.editor.contentDOM,
+    type: 'beforeinput',
+  });
+  assert.equal(runtime.editor.state.compartments.size, 1);
+  assert.equal(
+    runtime.editorManager.panes[0].activeFile.session,
+    runtime.editor.state,
+  );
+
+  second.state = createState('restored before a window-level event path');
+  first.dom.contains = (element) => {
+    if (typeof element?.nodeType !== 'number') {
+      throw new TypeError('contains requires a Node');
+    }
+    return element === first.dom || element === first.contentDOM;
+  };
+  assert.doesNotThrow(() => runtime.dispatchDocumentEvent({
+    composedPath: () => [{ windowLike: true }, second.contentDOM],
+    type: 'pointerdown',
+  }));
+  assert.equal(second.state.compartments.size, 1);
+
+  runtime.editor.state = createState('restored during rename');
+  runtime.emit('rename-file', runtime.editorManager.panes[0].activeFile);
   assert.equal(runtime.editor.state.compartments.size, 1);
 
+  runtime.editor.state = createState('restored during settings update');
+  runtime.settings.update();
+  assert.equal(runtime.editor.state.compartments.size, 1);
+
+  const changedView = createView();
+  runtime.emit('editor-state-changed', changedView);
+  assert.equal(changedView.state.compartments.size, 1);
+
   await runtime.unmount();
-  assert.equal(runtime.listenerCount('switch-file'), 0);
-  for (const view of [runtime.editor, second, third]) {
+  for (const event of [
+    'switch-file',
+    'file-loaded',
+    'new-file',
+    'rename-file',
+    'editor-state-changed',
+    'update:read-only',
+  ]) assert.equal(runtime.listenerCount(event), 0);
+  for (const event of ['focusin', 'pointerdown', 'beforeinput', 'keydown']) {
+    assert.equal(runtime.documentListenerCount(event), 0);
+  }
+  for (const view of [runtime.editor, second, third, changedView]) {
     const extensions = [...view.state.compartments.values()];
     assert.equal(extensions.length, 1);
     assert.equal(extensions[0].length, 0);
   }
+  assert.equal(runtime.iconStyles.length, 1);
+  assert.equal(runtime.iconStyles[0].removed, true);
 
   await runtime.init('/plugin/');
   assert.equal(runtime.listenerCount('switch-file'), 1);
   assert.equal(runtime.editor.state.compartments.size, 2);
+  assert.equal(runtime.iconStyles.length, 2);
+  assert.equal(
+    runtime.iconStyles.filter(({ removed }) => !removed).length,
+    1,
+  );
   await runtime.unmount();
 });
 
@@ -966,7 +1110,7 @@ test('CodeMirror mappings select snippets separately for each directory', async 
   runtime.settingsCallback('resetSnippetsDirectory');
   await flushAsync();
   assert.deepEqual(await getLabels(), ['htmlOnly']);
-  assert.equal(reads.at(-1), '/plugin/snippets/html.snippets');
+  assert.equal(reads.includes('/plugin/snippets/html.snippets'), true);
   assert.deepEqual(
     Object.keys(
       runtime.settings.value['acode.plugin.snippets'].modeMappingsByLocation,
@@ -1264,6 +1408,375 @@ test('CodeMirror snippet completions are prioritized above built-in results', as
   assert.equal(result.options.some(({ label }) => label === 'unrelated'), true);
   assert.equal(completion.boost, 99);
   assert.equal(completion.section, undefined);
+  assert.equal(completion.type, 'snippet');
+  await runtime.unmount();
+});
+
+test('CodeMirror capture handler expands exact triggers before native Tab handling', async () => {
+  let acceptedCompletions = 0;
+  let indented = 0;
+  const runtime = createBaseRuntime({
+    isCodeMirror: true,
+    modules: createCodeMirrorModules({
+      acceptCompletion() {
+        acceptedCompletions += 1;
+        return true;
+      },
+      indentMore() {
+        indented += 1;
+        return true;
+      },
+    }),
+    ace: null,
+    settingsValue: {
+      'acode.plugin.snippets': { snippetLocation: '' },
+    },
+    fsOperation() {
+      return {
+        async readFile() {
+          return 'snippet fun\n\tfunction ${1:name}() {$0}';
+        },
+      };
+    },
+  });
+  const file = {
+    currentMode: 'javascript',
+    filename: 'demo.js',
+    type: 'editor',
+  };
+  const view = createView(createState('fun'));
+  Object.assign(runtime.editor, view);
+  runtime.editorManager.activeFile = file;
+  runtime.editorManager.panes = [{ editor: runtime.editor, activeFile: file }];
+
+  await runtime.init('/plugin/');
+  let prevented = 0;
+  let stopped = 0;
+  runtime.dispatchDocumentEvent({
+    key: 'Tab',
+    preventDefault() { prevented += 1; },
+    stopImmediatePropagation() { stopped += 1; },
+    stopPropagation() {},
+    target: runtime.editor.contentDOM,
+    type: 'keydown',
+  });
+
+  assert.equal(prevented, 1);
+  assert.equal(stopped, 1);
+  assert.equal(acceptedCompletions, 0);
+  assert.equal(indented, 0);
+  assert.equal(runtime.editor.lastDispatch.changes[0].insert, 'function name() {}');
+
+  runtime.editor.state = createState('ordinary');
+  prevented = 0;
+  runtime.dispatchDocumentEvent({
+    key: 'Tab',
+    preventDefault() { prevented += 1; },
+    stopImmediatePropagation() {},
+    stopPropagation() {},
+    target: runtime.editor.contentDOM,
+    type: 'keydown',
+  });
+  assert.equal(prevented, 0);
+  assert.equal(acceptedCompletions, 0);
+  assert.equal(indented, 0);
+  await runtime.unmount();
+});
+
+test('CodeMirror queues one first-press Tab until its scope finishes loading', async () => {
+  let resolveRead;
+  let reads = 0;
+  const runtime = createBaseRuntime({
+    isCodeMirror: true,
+    modules: createCodeMirrorModules(),
+    ace: null,
+    settingsValue: {
+      'acode.plugin.snippets': { snippetLocation: '' },
+    },
+    fsOperation() {
+      return {
+        readFile() {
+          reads += 1;
+          return new Promise((resolve) => { resolveRead = resolve; });
+        },
+      };
+    },
+  });
+  const file = { currentMode: '', filename: 'demo.js', type: 'editor' };
+  const view = createView(createState('fun'));
+  Object.assign(runtime.editor, view);
+  runtime.editorManager.activeFile = file;
+  runtime.editorManager.panes = [{ editor: runtime.editor, activeFile: file }];
+  await runtime.init('/plugin/');
+
+  file.currentMode = 'javascript';
+  let prevented = 0;
+  const event = () => ({
+    key: 'Tab',
+    preventDefault() { prevented += 1; },
+    stopImmediatePropagation() {},
+    stopPropagation() {},
+    target: runtime.editor.contentDOM,
+    type: 'keydown',
+  });
+  runtime.dispatchDocumentEvent(event());
+  runtime.dispatchDocumentEvent(event());
+  await Promise.resolve();
+  assert.equal(prevented, 2);
+  assert.equal(reads, 1);
+
+  resolveRead('snippet fun\n\tfunction ${1:name}() {$0}');
+  await flushAsync();
+  assert.equal(reads, 1);
+  assert.equal(runtime.editor.lastDispatch.changes[0].insert, 'function name() {}');
+  await runtime.unmount();
+});
+
+test('CodeMirror cancels stale queued Tabs and performs delayed native fallback once', async () => {
+  const createDeferredRuntime = ({ acceptCompletion }) => {
+    let resolveRead;
+    const runtime = createBaseRuntime({
+      isCodeMirror: true,
+      modules: createCodeMirrorModules({ acceptCompletion }),
+      ace: null,
+      settingsValue: {
+        'acode.plugin.snippets': { snippetLocation: '' },
+      },
+      fsOperation() {
+        return {
+          readFile() {
+            return new Promise((resolve) => { resolveRead = resolve; });
+          },
+        };
+      },
+    });
+    return { getResolveRead: () => resolveRead, runtime };
+  };
+  const keyEvent = (runtime) => ({
+    key: 'Tab',
+    preventDefault() {},
+    stopImmediatePropagation() {},
+    stopPropagation() {},
+    target: runtime.editor.contentDOM,
+    type: 'keydown',
+  });
+
+  let nativeCalls = 0;
+  const stale = createDeferredRuntime({
+    acceptCompletion() {
+      nativeCalls += 1;
+      return true;
+    },
+  });
+  const staleFile = { currentMode: '', filename: 'demo.js', type: 'editor' };
+  Object.assign(stale.runtime.editor, createView(createState('fun')));
+  stale.runtime.editorManager.activeFile = staleFile;
+  stale.runtime.editorManager.panes = [{
+    editor: stale.runtime.editor,
+    activeFile: staleFile,
+  }];
+  await stale.runtime.init('/plugin/');
+  staleFile.currentMode = 'javascript';
+  stale.runtime.dispatchDocumentEvent(keyEvent(stale.runtime));
+  const queuedDispatch = stale.runtime.editor.lastDispatch;
+  stale.runtime.editor.state = createState('changed');
+  await Promise.resolve();
+  stale.getResolveRead()('snippet fun\n\tfunction ${1:name}() {$0}');
+  await flushAsync();
+  assert.equal(stale.runtime.editor.lastDispatch, queuedDispatch);
+  assert.equal(nativeCalls, 0);
+  await stale.runtime.unmount();
+
+  const fallback = createDeferredRuntime({
+    acceptCompletion() {
+      nativeCalls += 1;
+      return true;
+    },
+  });
+  const fallbackFile = { currentMode: '', filename: 'demo.js', type: 'editor' };
+  Object.assign(fallback.runtime.editor, createView(createState('ordinary')));
+  fallback.runtime.editorManager.activeFile = fallbackFile;
+  fallback.runtime.editorManager.panes = [{
+    editor: fallback.runtime.editor,
+    activeFile: fallbackFile,
+  }];
+  await fallback.runtime.init('/plugin/');
+  fallbackFile.currentMode = 'javascript';
+  fallback.runtime.dispatchDocumentEvent(keyEvent(fallback.runtime));
+  fallback.runtime.dispatchDocumentEvent(keyEvent(fallback.runtime));
+  await Promise.resolve();
+  fallback.getResolveRead()('snippet fun\n\tfunction ${1:name}() {$0}');
+  await flushAsync();
+  assert.equal(nativeCalls, 1);
+  await fallback.runtime.unmount();
+});
+
+test('CodeMirror retries transient scope reads before caching a success', async () => {
+  let reads = 0;
+  const runtime = createBaseRuntime({
+    isCodeMirror: true,
+    modules: createCodeMirrorModules(),
+    ace: null,
+    settingsValue: {
+      'acode.plugin.snippets': { snippetLocation: '' },
+    },
+    fsOperation() {
+      return {
+        async readFile() {
+          reads += 1;
+          if (reads < 3) throw new Error('Temporary EIO');
+          return 'snippet fun\n\tfunction ${1:name}() {$0}';
+        },
+      };
+    },
+  });
+  const file = {
+    currentMode: 'javascript',
+    filename: 'demo.js',
+    type: 'editor',
+  };
+  const state = createState('fun');
+  Object.assign(runtime.editor, createView(state));
+  runtime.editorManager.activeFile = file;
+  runtime.editorManager.panes = [{ editor: runtime.editor, activeFile: file }];
+
+  await runtime.init('/plugin/');
+  assert.equal(reads, 3);
+  const extension = [...state.compartments.values()][0];
+  const completionSource = extension[0].provider()[0].autocomplete;
+  const result = await completionSource({
+    aborted: false,
+    explicit: true,
+    pos: 3,
+    state,
+  });
+  assert.deepEqual(Array.from(result.options, ({ label }) => label), ['fun']);
+  assert.equal(reads, 3);
+  await runtime.unmount();
+});
+
+test('CodeMirror unmount cancels scheduled scope retries', async () => {
+  let reads = 0;
+  const runtime = createBaseRuntime({
+    isCodeMirror: true,
+    modules: createCodeMirrorModules(),
+    ace: null,
+    settingsValue: {
+      'acode.plugin.snippets': { snippetLocation: '' },
+    },
+    fsOperation() {
+      return {
+        async readFile() {
+          reads += 1;
+          throw new Error('Temporary EIO');
+        },
+      };
+    },
+  });
+  const file = {
+    currentMode: 'javascript',
+    filename: 'demo.js',
+    type: 'editor',
+  };
+  Object.assign(runtime.editor, createView(createState('fun')));
+  runtime.editorManager.activeFile = file;
+  runtime.editorManager.panes = [{ editor: runtime.editor, activeFile: file }];
+
+  const initialization = runtime.init('/plugin/');
+  await waitForCondition(() => reads === 1);
+  await runtime.unmount();
+  await initialization;
+  assert.equal(reads, 1);
+  assert.equal(runtime.documentListenerCount('keydown'), 0);
+});
+
+test('CodeMirror autocomplete visibility is dynamic without disabling snippets', async () => {
+  const settingsValue = {
+    'acode.plugin.snippets': {
+      modeMappingsByLocation: {
+        $bundled: { javascript: 'javascript' },
+      },
+      showInAutocomplete: 'invalid',
+      snippetLocation: '',
+    },
+  };
+  const runtime = createBaseRuntime({
+    isCodeMirror: true,
+    modules: createCodeMirrorModules(),
+    ace: null,
+    settingsValue,
+    fsOperation() {
+      return {
+        async readFile() {
+          return [
+            'snippet pick',
+            '\t${1|one,two|}',
+            'snippet fun',
+            '\tfunction ${1:name}() {$0}',
+          ].join('\n');
+        },
+      };
+    },
+  });
+  const file = {
+    currentMode: 'javascript',
+    filename: 'demo.js',
+    type: 'editor',
+  };
+  const state = createState('pick');
+  const view = createView(state);
+  Object.assign(runtime.editor, view);
+  runtime.editorManager.activeFile = file;
+  runtime.editorManager.panes = [{ editor: runtime.editor, activeFile: file }];
+
+  await runtime.init('/plugin/');
+  const autocompleteSetting = runtime.settingsList.find(
+    ({ key }) => key === 'showInAutocomplete',
+  );
+  assert.equal(autocompleteSetting.checkbox, true);
+  const extension = [...state.compartments.values()][0];
+  const completionSource = extension[0].provider()[0].autocomplete;
+  const context = {
+    aborted: false,
+    explicit: false,
+    pos: 4,
+    state,
+  };
+  const enabledResult = await completionSource(context);
+  const choiceSnippet = enabledResult.options.find(
+    ({ label }) => label === 'pick',
+  );
+  assert.equal(enabledResult.options.length, 2);
+  assert.equal(choiceSnippet.apply(view, choiceSnippet, 0, 4), true);
+  const activeSession = view.lastDispatch.effects.value;
+
+  runtime.settingsCallback('showInAutocomplete', false);
+  assert.equal(settingsValue['acode.plugin.snippets'].showInAutocomplete, false);
+  assert.equal(settingsValue['acode.plugin.snippets'].snippetLocation, '');
+  assert.deepEqual(
+    settingsValue['acode.plugin.snippets'].modeMappingsByLocation,
+    { $bundled: { javascript: 'javascript' } },
+  );
+  assert.equal(await completionSource(context), null);
+  assert.equal(
+    await completionSource({ ...context, explicit: true }),
+    null,
+  );
+  assert.equal(runtime.executeCommand('expandSnippet', view), true);
+
+  state.field = () => activeSession;
+  const choiceResult = await completionSource(context);
+  assert.deepEqual(
+    Array.from(choiceResult.options, ({ label }) => label),
+    ['one', 'two'],
+  );
+  assert.equal(choiceResult.options.every(({ type }) => type === 'text'), true);
+  delete state.field;
+
+  runtime.settingsCallback('showInAutocomplete', true);
+  assert.equal(settingsValue['acode.plugin.snippets'].showInAutocomplete, true);
+  assert.equal((await completionSource(context)).options.length, 2);
+  assert.equal(runtime.settings.updateCalls, 2);
   await runtime.unmount();
 });
 
@@ -1464,8 +1977,16 @@ test('packaged runtime loads and delegates through the legacy Ace adapter', asyn
   assert.deepEqual(runtime.addedIcons, []);
   assert.equal(runtime.iconStyles.length, 1);
   assert.match(runtime.iconStyles[0].textContent, /file_type_snippets/);
+  assert.doesNotMatch(
+    runtime.iconStyles[0].textContent,
+    /cm-completionIcon-snippet/,
+  );
   assert.equal(
     runtime.settingsList.some(({ key }) => key === 'languageMappings'),
+    false,
+  );
+  assert.equal(
+    runtime.settingsList.some(({ key }) => key === 'showInAutocomplete'),
     false,
   );
   await runtime.unmount();
