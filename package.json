@@ -9,9 +9,21 @@
   "dependencies": {
     "@deadlyjack/ajax": "^1.2.3"
   },
+  "overrides": {
+    "http-proxy-agent": {
+      "debug": "4.4.3"
+    },
+    "https-proxy-agent": {
+      "debug": "4.4.3"
+    },
+    "uri-js": {
+      "punycode": "2.3.0"
+    }
+  },
   "devDependencies": {
     "@babel/core": "^7.18.13",
     "@babel/preset-env": "^7.18.10",
+    "@biomejs/biome": "2.5.11",
     "@codemirror/autocomplete": "6.20.3",
     "@codemirror/commands": "6.11.0",
     "@codemirror/language": "6.12.4",
@@ -26,6 +38,9 @@
     "webpack-cli": "^5.1.4"
   },
   "scripts": {
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --write .",
+    "pretest": "npm run build-release",
     "test": "node --test \"test/*.test.*\"",
     "build": "webpack",
     "dev": "node dev/start-dev.js",

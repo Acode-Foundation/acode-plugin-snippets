@@ -47,7 +47,7 @@ class TestStringStream {
     }
 
     const matched = remaining.match(pattern);
-    if (!matched || matched.index !== 0) return null;
+    if (matched?.index !== 0) return null;
     if (consume) this.pos += matched[0].length;
     return matched;
   }

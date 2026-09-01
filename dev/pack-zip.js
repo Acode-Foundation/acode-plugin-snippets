@@ -17,7 +17,11 @@ async function packZip({
     await fs.promises.readFile(path.join(rootDir, 'plugin.json')),
   );
   zip.file('readme.md', await fs.promises.readFile(readmeFile));
-  await addFolder(zip, '', path.join(rootDir, 'dist'));
+  await addFolder(zip, '', path.join(rootDir, 'dist'), {
+    exclude: (archivePath) =>
+      archivePath === 'snippets' || archivePath.startsWith('snippets/'),
+  });
+  await addFolder(zip, 'snippets', path.join(rootDir, 'snippets'));
 
   const archive = await zip.generateAsync({
     type: 'nodebuffer',
@@ -41,15 +45,17 @@ function resolveReadme(rootDir) {
   return path.join(rootDir, 'README.md');
 }
 
-async function addFolder(zip, archiveRoot, folder) {
+async function addFolder(zip, archiveRoot, folder, options = {}) {
+  const exclude = options.exclude || (() => false);
   const entries = await fs.promises.readdir(folder, { withFileTypes: true });
   entries.sort((left, right) => left.name.localeCompare(right.name));
 
   for (const entry of entries) {
     const filePath = path.join(folder, entry.name);
     const archivePath = path.posix.join(archiveRoot, entry.name);
+    if (exclude(archivePath, entry)) continue;
     if (entry.isDirectory()) {
-      await addFolder(zip, archivePath, filePath);
+      await addFolder(zip, archivePath, filePath, options);
     } else if (!/LICENSE\.txt$/.test(entry.name)) {
       zip.file(archivePath, await fs.promises.readFile(filePath));
     }

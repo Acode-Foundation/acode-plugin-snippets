@@ -40,6 +40,14 @@ test('ZIP packaging replaces completed archives without partial files', async (c
   const firstArchive = await fs.promises.readFile(outputFile);
   assert.equal(await readArchiveFile(firstArchive, 'main.js'), 'version one');
   assert.equal(await readArchiveFile(firstArchive, 'nested/module.js'), 'nested');
+  assert.equal(
+    await readArchiveFile(firstArchive, 'snippets/example.snippets'),
+    'canonical snippet',
+  );
+  assert.equal(
+    (await JSZip.loadAsync(firstArchive)).file('snippets/stale-only.snippets'),
+    null,
+  );
 
   await fs.promises.writeFile(path.join(rootDir, 'dist/main.js'), 'version two');
   await packZip({ rootDir });
@@ -246,12 +254,30 @@ async function createPluginFixture() {
   await fs.promises.mkdir(path.join(rootDir, 'dist/nested'), {
     recursive: true,
   });
+  await fs.promises.mkdir(path.join(rootDir, 'dist/snippets'), {
+    recursive: true,
+  });
+  await fs.promises.mkdir(path.join(rootDir, 'snippets'), {
+    recursive: true,
+  });
   await Promise.all([
     fs.promises.writeFile(path.join(rootDir, 'icon.png'), 'icon'),
     fs.promises.writeFile(path.join(rootDir, 'plugin.json'), '{"name":"test"}'),
     fs.promises.writeFile(path.join(rootDir, 'readme.md'), '# Test'),
     fs.promises.writeFile(path.join(rootDir, 'dist/main.js'), 'version one'),
     fs.promises.writeFile(path.join(rootDir, 'dist/nested/module.js'), 'nested'),
+    fs.promises.writeFile(
+      path.join(rootDir, 'dist/snippets/example.snippets'),
+      'stale generated snippet',
+    ),
+    fs.promises.writeFile(
+      path.join(rootDir, 'dist/snippets/stale-only.snippets'),
+      'stale only',
+    ),
+    fs.promises.writeFile(
+      path.join(rootDir, 'snippets/example.snippets'),
+      'canonical snippet',
+    ),
   ]);
   return rootDir;
 }

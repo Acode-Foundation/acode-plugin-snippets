@@ -7,10 +7,17 @@ import { fileURLToPath } from 'node:url';
 import {
   acceptCompletion,
   autocompletion,
+  clearSnippet,
   closeCompletion,
   completionStatus,
   currentCompletions,
+  hasNextSnippetField,
+  hasPrevSnippetField,
+  nextSnippetField,
+  prevSnippetField,
   selectedCompletionIndex,
+  snippet,
+  snippetCompletion,
   startCompletion,
 } from '@codemirror/autocomplete';
 import { indentMore, indentWithTab } from '@codemirror/commands';
@@ -186,7 +193,12 @@ test('production runtime self-heals real CodeMirror states and owns Tab determin
             error.code = 'EIO';
             throw error;
           }
-          return 'snippet fun\n\tfunction ${1:name}() {$0}';
+          return [
+            'snippet fun',
+            '\tfunction ${1:name}() {',
+            '\t\t${2:// body}',
+            '\t}$0',
+          ].join('\n');
         }
         if (url.endsWith('/typescript.snippets')) {
           return new Promise((resolve) => { resolveTypescript = resolve; });
@@ -199,6 +211,13 @@ test('production runtime self-heals real CodeMirror states and owns Tab determin
     const modules = {
       '@codemirror/autocomplete': {
         acceptCompletion,
+        clearSnippet,
+        hasNextSnippetField,
+        hasPrevSnippetField,
+        nextSnippetField,
+        prevSnippetField,
+        snippet,
+        snippetCompletion,
         startCompletion,
       },
       '@codemirror/commands': { indentMore },
@@ -281,10 +300,37 @@ test('production runtime self-heals real CodeMirror states and owns Tab determin
     assert.equal(firstTab.defaultPrevented, true);
     assert.equal(duplicateTab.defaultPrevented, true);
     await waitFor(
-      () => editorView.state.doc.toString() === 'function name() {}',
+      () => editorView.state.doc.toString() === [
+        'function name() {',
+        '  // body',
+        '}',
+      ].join('\n'),
       'the delayed snippet expansion',
     );
     assert.equal(javascriptReads, 3);
+    assert.equal(hasNextSnippetField(editorView.state), true);
+    editorView.dispatch(editorView.state.replaceSelection('handler'));
+    assert.equal(editorView.state.doc.toString(), [
+      'function handler() {',
+      '  // body',
+      '}',
+    ].join('\n'));
+    const bodyTab = pressTab(editorView);
+    assert.equal(bodyTab.defaultPrevented, true);
+    assert.equal(
+      editorView.state.sliceDoc(
+        editorView.state.selection.main.from,
+        editorView.state.selection.main.to,
+      ),
+      '// body',
+    );
+    const finalTab = pressTab(editorView);
+    assert.equal(finalTab.defaultPrevented, true);
+    assert.equal(hasNextSnippetField(editorView.state), false);
+    assert.equal(
+      editorView.state.selection.main.head,
+      editorView.state.doc.length,
+    );
 
     settings.value['acode.plugin.snippets'].showInAutocomplete = true;
     editorView.setState(createCoreState('fun'));
@@ -310,6 +356,18 @@ test('production runtime self-heals real CodeMirror states and owns Tab determin
       dom.window.document.querySelectorAll('.cm-completionIcon-snippet').length,
       1,
     );
+    const snippetItem = currentCompletions(editorView.state).find(
+      ({ type }) => type === 'snippet',
+    );
+    assert.equal(typeof snippetItem?.apply, 'function');
+    snippetItem.apply(editorView, snippetItem, 0, 3);
+    assert.equal(editorView.state.doc.toString(), [
+      'function name() {',
+      '  // body',
+      '}',
+    ].join('\n'));
+    assert.equal(hasNextSnippetField(editorView.state), true);
+    assert.equal(clearSnippet(editorView), true);
     closeCompletion(editorView);
 
     editorView.setState(createCoreState('ordinary'));

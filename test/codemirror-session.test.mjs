@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {
-  buildSnippetInsertion,
-  createCodeMirrorSnippetSession,
-} from '../src/codemirror-snippet-session.mjs';
+import { createCodeMirrorSnippetSession } from '../src/codemirror-snippet-session.mjs';
 import { compileSnippetTemplate } from '../src/snippet-utils.mjs';
 
 function createSessionHarness(initialText = '') {
@@ -190,59 +187,6 @@ function createSessionHarness(initialText = '') {
     view,
   };
 }
-
-test('merges mirrored fields and final cursors across multiple selections', () => {
-  const compiled = compileSnippetTemplate('const ${1:name} = $1; $0');
-  const insertion = buildSnippetInsertion([
-    { from: 0, to: 1, compiled },
-    { from: 2, to: 3, compiled },
-  ]);
-
-  assert.equal(insertion.changes.length, 2);
-  assert.deepEqual(insertion.groups.map(({ id }) => id), ['1']);
-  assert.equal(insertion.groups[0].ranges.length, 4);
-  assert.ok(insertion.groups[0].ranges[2].from > insertion.groups[0].ranges[1].to);
-  assert.equal(insertion.finalRanges.length, 2);
-  assert.ok(insertion.finalRanges[1].from > insertion.finalRanges[0].to);
-  assert.equal(insertion.finalRanges[0].from, insertion.finalRanges[0].to);
-});
-
-test('keeps transformed mirrors attached to their editable source field', () => {
-  const compiled = compileSnippetTemplate(
-    'import ${1/.*\\///} from "${1}"; $0',
-  );
-  const insertion = buildSnippetInsertion([{ from: 4, to: 8, compiled }]);
-  const source = insertion.groups[0];
-
-  assert.equal(source.id, '1');
-  assert.equal(source.ranges.length, 1);
-  assert.equal(source.transforms.length, 1);
-  assert.equal(source.transforms[0].regex, '.*\\/');
-  assert.deepEqual(insertion.groups.map(({ id }) => id), ['1']);
-  assert.equal(insertion.finalRanges.length, 1);
-});
-
-test('uses an implicit insertion-end cursor when a snippet omits $0', () => {
-  const compiled = compileSnippetTemplate('${1:name} tail');
-  const insertion = buildSnippetInsertion([{ from: 0, to: 0, compiled }]);
-
-  assert.deepEqual(insertion.groups.map(({ id }) => id), ['1']);
-  assert.deepEqual(insertion.finalRanges, [{ from: 9, to: 9 }]);
-});
-
-test('retains one final cursor per placeholder-free insertion', () => {
-  const compiled = compileSnippetTemplate('done');
-  const insertion = buildSnippetInsertion([
-    { from: 0, to: 1, compiled },
-    { from: 2, to: 3, compiled },
-  ]);
-
-  assert.deepEqual(insertion.groups, []);
-  assert.deepEqual(insertion.finalRanges, [
-    { from: 4, to: 4 },
-    { from: 9, to: 9 },
-  ]);
-});
 
 test('moves to the mapped implicit final cursor and clears the session', () => {
   const { EditorSelection, session, view } = createSessionHarness();

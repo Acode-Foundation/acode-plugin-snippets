@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   applySnippetTransform,
   compileSnippetTemplate,
+  compiledToCodeMirrorSnippet,
   createSnippetVariables,
   findMatchingSnippet,
   getCompletionPrefix,
@@ -134,7 +135,7 @@ test('matches the Ace golden expansion for fun and keeps ordered field ranges', 
 
 test('supports Ace match variables, regex guards, and end triggers used by JavaScript', () => {
   const javascript = parseSnippetFile(
-    fs.readFileSync(path.join(repoRoot, 'dist/snippets/javascript.snippets'), 'utf8'),
+    fs.readFileSync(path.join(repoRoot, 'snippets/javascript.snippets'), 'utf8'),
     'javascript',
   ).snippets;
   const cases = [
@@ -189,6 +190,47 @@ test('supports mirrors, nested defaults, choices, final cursors, and escaped dol
   assert.deepEqual(compiled.fields.map(({ id }) => id), ['1', '2', '3', '0']);
   assert.equal(compiled.fields[0].ranges.length, 2);
   assert.deepEqual(compiled.fields[2].choices, ['one', 'two', 'three']);
+});
+
+test('converts safe compiled snippets to native CodeMirror templates', () => {
+  const compiled = compileSnippetTemplate(
+    'const ${1:name} = { value: $1 };$0',
+  );
+  assert.deepEqual(compiledToCodeMirrorSnippet(compiled), {
+    template: 'const ${1:name} = \\{ value: ${1:name} \\};${0}',
+    unsupportedReason: '',
+  });
+
+  const implicitFinal = compiledToCodeMirrorSnippet(
+    compileSnippetTemplate('return ${1:value};'),
+  );
+  assert.equal(implicitFinal.template, 'return ${1:value};${0}');
+  assert.equal(implicitFinal.unsupportedReason, '');
+
+  const resolved = compiledToCodeMirrorSnippet(compileSnippetTemplate(
+    '${SELECTION?:fallback}: ${M1?matched} {literal}',
+    {
+      matches: { M1: 'value' },
+      variables: { SELECTION: 'selected' },
+    },
+  ));
+  assert.equal(resolved.template, 'selected: matched \\{literal\\}${0}');
+});
+
+test('routes advanced or conflicting compiled fields to the custom session', () => {
+  const cases = [
+    ['${1|one,two|}', 'choice field'],
+    ['${1:name} ${1/(.*)/${1:/upcase}/}', 'transformed field'],
+    ['${1:outer ${2:inner}}', 'nested or conflicting fields'],
+    ['${1:first\nsecond}', 'multiline field'],
+  ];
+  for (const [source, reason] of cases) {
+    assert.equal(
+      compiledToCodeMirrorSnippet(compileSnippetTemplate(source)).unsupportedReason,
+      reason,
+      source,
+    );
+  }
 });
 
 test('applies variable and placeholder transforms, flags, and case operators', () => {
@@ -341,11 +383,13 @@ test('cools down failed cache loads without poisoning later retries', async () =
 });
 
 test('accepts and compiles all 3,578 packaged snippets, including all 42 JavaScript snippets', () => {
-  const snippetDirectory = path.join(repoRoot, 'dist/snippets');
+  const snippetDirectory = path.join(repoRoot, 'snippets');
   const files = fs.readdirSync(snippetDirectory)
     .filter((filename) => filename.endsWith('.snippets'));
   let snippetCount = 0;
   let javascriptCount = 0;
+  let fallbackCount = 0;
+  let nativeCount = 0;
 
   assert.equal(files.length, 55);
   for (const filename of files) {
@@ -358,12 +402,21 @@ test('accepts and compiles all 3,578 packaged snippets, including all 42 JavaScr
     snippetCount += parsed.snippets.length;
     if (scope === 'javascript') javascriptCount = parsed.snippets.length;
     for (const snippet of parsed.snippets) {
-      assert.doesNotThrow(() => compileSnippetTemplate(snippet.content), (
-        `${filename}: ${snippet.name}`
-      ));
+      const compiled = compileSnippetTemplate(snippet.content);
+      const converted = compiledToCodeMirrorSnippet(compiled);
+      assert.equal(
+        Boolean(converted.template) !== Boolean(converted.unsupportedReason),
+        true,
+        `${filename}: ${snippet.name}`,
+      );
+      if (converted.unsupportedReason) fallbackCount += 1;
+      else nativeCount += 1;
     }
   }
 
   assert.equal(snippetCount, 3578);
   assert.equal(javascriptCount, 42);
+  assert.equal(nativeCount + fallbackCount, snippetCount);
+  assert.equal(nativeCount > 0, true);
+  assert.equal(fallbackCount > 0, true);
 });

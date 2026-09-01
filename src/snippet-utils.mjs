@@ -630,7 +630,7 @@ function renderFormat(format, captures) {
     if (format[index] === '$' && format[index + 1] === '{') {
       const braced = readBraced(format, index);
       if (braced) {
-        const conditional = /^(\d+):([+\-?\/])([\s\S]*)$/.exec(braced.content);
+        const conditional = /^(\d+):([-+?/])([\s\S]*)$/.exec(braced.content);
         if (conditional) {
           const captured = captures[Number(conditional[1])] || '';
           if (conditional[2] === '/') {
@@ -817,8 +817,99 @@ export function compileSnippetTemplate(template, options = {}) {
   );
 }
 
-// Kept for plugin-local callers. Native CodeMirror snippets cannot represent
-// Ace transforms, so runtime insertion uses compileSnippetTemplate directly.
+function nativeConversionFailure(reason) {
+  return { template: '', unsupportedReason: reason };
+}
+
+function escapeNativeSnippetText(value) {
+  return String(value).replace(/[{}]/g, '\\$&');
+}
+
+/**
+ * Convert already-resolved Ace snippet output to CodeMirror's native snippet
+ * template. Unsupported field layouts deliberately return a reason so the
+ * caller can preserve them through the Ace-compatible session instead.
+ */
+export function compiledToCodeMirrorSnippet(compiled) {
+  if (!compiled || typeof compiled.text !== 'string' || !Array.isArray(compiled.fields)) {
+    return nativeConversionFailure('invalid compiled snippet');
+  }
+
+  const ranges = [];
+  for (const field of compiled.fields) {
+    const id = String(field?.id ?? '');
+    if (!/^\d+$/.test(id)) {
+      return nativeConversionFailure('named field');
+    }
+    if (field.choices?.length) {
+      return nativeConversionFailure('choice field');
+    }
+    if (field.transforms?.length) {
+      return nativeConversionFailure('transformed field');
+    }
+
+    const seen = new Set();
+    for (const range of field.ranges || []) {
+      const from = Number(range?.from);
+      const to = Number(range?.to);
+      if (
+        !Number.isInteger(from) ||
+        !Number.isInteger(to) ||
+        from < 0 ||
+        to < from ||
+        to > compiled.text.length
+      ) {
+        return nativeConversionFailure('invalid field range');
+      }
+      if (compiled.text.slice(from, to).includes('\n')) {
+        return nativeConversionFailure('multiline field');
+      }
+      const key = `${from}:${to}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ranges.push({ from, id, to });
+    }
+  }
+
+  ranges.sort((left, right) => (
+    left.from - right.from || left.to - right.to || Number(left.id) - Number(right.id)
+  ));
+  for (let index = 0; index < ranges.length; index += 1) {
+    const left = ranges[index];
+    for (let otherIndex = index + 1; otherIndex < ranges.length; otherIndex += 1) {
+      const right = ranges[otherIndex];
+      if (right.from > left.to) break;
+      if (right.from === left.to && !(left.from === left.to && right.from === right.to)) {
+        continue;
+      }
+      if (
+        left.from === right.from ||
+        right.from < left.to ||
+        (left.from === left.to && right.from === right.to)
+      ) {
+        return nativeConversionFailure('nested or conflicting fields');
+      }
+    }
+  }
+
+  let template = '';
+  let position = 0;
+  let hasFinalCursor = false;
+  for (const range of ranges) {
+    template += escapeNativeSnippetText(compiled.text.slice(position, range.from));
+    const value = escapeNativeSnippetText(
+      compiled.text.slice(range.from, range.to),
+    );
+    template += value ? `\${${range.id}:${value}}` : `\${${range.id}}`;
+    position = range.to;
+    if (range.id === '0') hasFinalCursor = true;
+  }
+  template += escapeNativeSnippetText(compiled.text.slice(position));
+  if (!hasFinalCursor) template += '${0}';
+  return { template, unsupportedReason: '' };
+}
+
+// Kept for plugin-local callers that only need resolved insertion text.
 export function prepareSnippetTemplate(template, variables = {}) {
   return {
     template: compileSnippetTemplate(template, { variables }).text,

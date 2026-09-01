@@ -188,7 +188,15 @@ unchanged.
 
 ## Development
 
-Run `npm run dev` (or the backward-compatible `npm run start-dev`) to watch the bundle and serve the completed archive over local HTTP. The command prints the LAN URL to use for `dist.zip` after the first successful build.
+Install dependencies with `npm ci`, then run `npm run lint` and `npm test` to
+check the source and test suite. Use `npm run lint:fix` to apply safe Biome lint
+fixes.
+
+Run `npm run dev` (or the backward-compatible `npm run start-dev`) to watch the
+bundle and serve the completed archive over local HTTP. The command prints the
+LAN URL to use for `dist.zip` after the first successful build. The generated
+`dist/` directory and `dist.zip` archive are local build outputs and are not
+committed.
 
 ## How to write snippets?
 

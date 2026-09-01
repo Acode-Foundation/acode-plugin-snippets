@@ -161,7 +161,7 @@ function tokenBody(stream, state) {
       }
     } else if (activeFrame.mode === 'formatVariableValue') {
       if (stream.match(/^\/(?:[A-Za-z_]\w*)/)) return 'keyword';
-      if (stream.match(/^[?+\-]/)) return 'punctuation';
+      if (stream.match(/^[-?+]/)) return 'punctuation';
     }
   }
 

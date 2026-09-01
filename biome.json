@@ -1,0 +1,28 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.11/schema.json",
+  "files": {
+    "includes": [
+      "src/**",
+      "test/**",
+      "dev/**",
+      "webpack.config.js",
+      "postcss.config.js"
+    ]
+  },
+  "formatter": {
+    "enabled": false
+  },
+  "assist": {
+    "enabled": false
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "suspicious": {
+        "noPrototypeBuiltins": "off",
+        "noTemplateCurlyInString": "off"
+      }
+    }
+  }
+}
