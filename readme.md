@@ -13,6 +13,13 @@ a JavaScript file, type `fun` to use the function snippet.
 The workflows below apply to CodeMirror. Ace continues using its native snippet
 completion and expansion behavior.
 
+## Compatibility
+
+The plugin bundle is compiled for the Chrome 51-era WebView shipped with
+Android 7/API 24. This keeps legacy Acode releases using Ace compatible with
+factory WebViews. CodeMirror features activate only when the installed Acode
+version exposes its CodeMirror modules and supports the device's WebView.
+
 ### With autocomplete suggestions enabled
 
 1. Start typing a snippet trigger.

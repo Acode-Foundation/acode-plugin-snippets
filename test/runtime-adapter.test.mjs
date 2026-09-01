@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { parse } from 'acorn';
 import fs from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import createWebpackConfig from '../webpack.config.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const bundle = fs.readFileSync(path.join(repoRoot, 'dist/main.js'), 'utf8');
@@ -32,6 +34,7 @@ function createBaseRuntime({
   consoleObject = console,
   pluginDir,
   define,
+  disableModernBuiltins = false,
 }) {
   let init;
   let unmount;
@@ -195,6 +198,12 @@ function createBaseRuntime({
     window: { acode, document, system, Terminal, PLUGIN_DIR: pluginDir },
   });
   context.self = context;
+  if (disableModernBuiltins) {
+    vm.runInContext(
+      'Object.entries = undefined; Promise.prototype.finally = undefined;',
+      context,
+    );
+  }
   vm.runInContext(bundle, context);
 
   return {
@@ -241,6 +250,44 @@ function createBaseRuntime({
     },
   };
 }
+
+test('production bundle supports the factory API 24 WebView contract', () => {
+  assert.doesNotThrow(() => parse(bundle, {
+    ecmaVersion: 5,
+    sourceType: 'script',
+  }));
+
+  const unsupportedRuntimeApis = [
+    '.at(',
+    '.finally(',
+    '.flat(',
+    '.flatMap(',
+    '.replaceAll(',
+    'AbortController',
+    'globalThis',
+    'Object.entries',
+    'Object.fromEntries',
+    'Object.hasOwn(',
+    'Object.values',
+    'Promise.allSettled',
+    'Promise.any',
+    'queueMicrotask(',
+    'structuredClone',
+    'WeakRef',
+  ];
+  for (const api of unsupportedRuntimeApis) {
+    assert.equal(bundle.includes(api), false, api);
+  }
+
+  const [config] = createWebpackConfig({}, { mode: 'production' });
+  const scriptRule = config.module.rules.find(({ test: pattern }) => (
+    pattern?.test('runtime.mjs')
+  ));
+  assert.ok(scriptRule);
+  assert.equal(scriptRule.test.test('runtime.js'), true);
+  assert.equal(scriptRule.test.test('runtime.jsx'), true);
+  assert.deepEqual(config.target, ['web', 'es5']);
+});
 
 function createSnippetFileSystem({
   filesDirectory = '/data/user/0/com.foxdebug.acode/files',
@@ -2043,6 +2090,7 @@ test('packaged runtime loads and delegates through the legacy Ace adapter', asyn
     isCodeMirror: false,
     ace,
     define,
+    disableModernBuiltins: true,
     settingsValue: {
       'acode.plugin.snippets': { snippetLocation: '/custom-snippets' },
     },

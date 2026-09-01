@@ -59,7 +59,8 @@ export function normalizeModeMappings(mappings) {
   }
 
   const normalized = {};
-  for (const [mode, scope] of Object.entries(mappings)) {
+  for (const mode of Object.keys(mappings)) {
+    const scope = mappings[mode];
     const mapping = normalizeModeMapping(mode, scope);
     if (mapping) normalized[mapping.mode] = mapping.scope;
   }
@@ -1013,7 +1014,7 @@ export class SnippetCache {
     if (failure) this.failures.delete(scope);
 
     const generation = this.generation;
-    const pending = Promise.resolve()
+    const loading = Promise.resolve()
       .then(() => this.loader(scope))
       .then((value) => {
         if (generation === this.generation) {
@@ -1030,10 +1031,17 @@ export class SnippetCache {
           });
         }
         throw error;
-      })
-      .finally(() => {
-        if (this.pending.get(scope) === pending) this.pending.delete(scope);
       });
+    const pending = loading.then(
+      (value) => {
+        if (this.pending.get(scope) === pending) this.pending.delete(scope);
+        return value;
+      },
+      (error) => {
+        if (this.pending.get(scope) === pending) this.pending.delete(scope);
+        throw error;
+      },
+    );
     this.pending.set(scope, pending);
     return pending;
   }
