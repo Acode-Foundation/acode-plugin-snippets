@@ -18,6 +18,7 @@ function createWebpackConfig(_environment, options) {
 
   return [{
     mode,
+    target: ['web', 'es5'],
     entry: {
       main: './src/main.js',
     },
@@ -27,7 +28,7 @@ function createWebpackConfig(_environment, options) {
     module: {
       rules: [
         {
-          test: /\.(js|jsx)$/i,
+          test: /\.(?:mjs|js|jsx)$/i,
           loader: 'babel-loader',
         },
       ],

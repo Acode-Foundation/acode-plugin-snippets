@@ -29,6 +29,7 @@
     "@codemirror/language": "6.12.4",
     "@codemirror/state": "6.7.1",
     "@codemirror/view": "6.43.9",
+    "acorn": "8.8.2",
     "babel-loader": "^9.1.2",
     "jsdom": "26.1.0",
     "jszip": "^3.10.1",
@@ -47,5 +48,5 @@
     "start-dev": "node dev/start-dev.js",
     "build-release": "webpack --mode production"
   },
-  "browserslist": "cover 100%,not android < 5"
+  "browserslist": "Chrome >= 51"
 }

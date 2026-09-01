@@ -1373,9 +1373,9 @@ class AcodeSnippets {
   async #openLanguageMappings() {
     while (true) {
       const mappings = this.getModeMappings();
-      const entries = Object.entries(mappings).sort(([left], [right]) => (
-        left.localeCompare(right)
-      ));
+      const entries = Object.keys(mappings)
+        .map((mode) => [mode, mappings[mode]])
+        .sort(([left], [right]) => left.localeCompare(right));
       const options = [
         {
           value: ADD_MAPPING_ACTION,
