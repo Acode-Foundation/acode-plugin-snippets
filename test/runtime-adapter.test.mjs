@@ -316,6 +316,7 @@ function createCodeMirrorModules({
   existingSnippetsLanguage = false,
   fileIcons = {},
   indentMore = () => false,
+  nativeSnippets = true,
 } = {}) {
   const defineEffect = () => {
     const effectType = {
@@ -351,8 +352,17 @@ function createCodeMirrorModules({
     }
   }
   const fileIconRequests = [];
+  const nativeSnippetCalls = [];
+  const applyNativeSnippet = (template) => (editor, completion, from, to) => {
+    const insert = template
+      .replace(/\$\{\d+(?::((?:\\[{}]|[^{}])*))?\}/g, '$1')
+      .replace(/\\([{}])/g, '$1');
+    nativeSnippetCalls.push({ completion, from, template, to });
+    editor.dispatch({ changes: [{ from, insert, to }] });
+  };
   return {
     fileIconRequests,
+    nativeSnippetCalls,
     helpers: {
       getIconForFile(filename) {
         fileIconRequests.push(filename);
@@ -364,6 +374,18 @@ function createCodeMirrorModules({
     '@codemirror/autocomplete': {
       acceptCompletion,
       startCompletion: () => true,
+      ...(nativeSnippets ? {
+        clearSnippet: () => false,
+        hasNextSnippetField: () => false,
+        hasPrevSnippetField: () => false,
+        nextSnippetField: () => false,
+        prevSnippetField: () => false,
+        snippet: applyNativeSnippet,
+        snippetCompletion: (template, completion) => ({
+          ...completion,
+          apply: applyNativeSnippet(template),
+        }),
+      } : {}),
     },
     '@codemirror/commands': { indentMore },
     '@codemirror/language': {
@@ -1120,6 +1142,70 @@ test('CodeMirror mappings select snippets separately for each directory', async 
   await runtime.unmount();
 });
 
+test('custom files route safe and transformed snippets independently', async () => {
+  const modules = createCodeMirrorModules();
+  const mixedSnippets = [
+    'snippet safe',
+    '\tconst ${1:name} = $1;$0',
+    'snippet transformed',
+    '\t${1:name} ${1/(.*)/${1:/upcase}/}$0',
+  ].join('\n');
+  const runtime = createBaseRuntime({
+    isCodeMirror: true,
+    modules,
+    ace: null,
+    settingsValue: {
+      'acode.plugin.snippets': {
+        modeMappingsByLocation: { '/custom': { zig: 'mixed' } },
+        snippetLocation: '/custom',
+      },
+    },
+    fsOperation(url) {
+      return {
+        async readFile() {
+          if (url === '/custom/mixed.snippets') return mixedSnippets;
+          const error = new Error(`Missing file: ${url}`);
+          error.code = 'ENOENT';
+          throw error;
+        },
+      };
+    },
+  });
+  const file = { currentMode: 'zig', filename: 'demo.zig', type: 'editor' };
+  const state = createState('safe');
+  const editorView = createView(state);
+  Object.assign(runtime.editor, editorView);
+  const view = runtime.editor;
+  runtime.editorManager.activeFile = file;
+  runtime.editorManager.panes = [{ activeFile: file, editor: runtime.editor }];
+
+  await runtime.init('/plugin/');
+  const extension = [...state.compartments.values()][0];
+  const completionSource = extension[0].provider()[0].autocomplete;
+  const result = await completionSource({
+    aborted: false,
+    explicit: true,
+    pos: state.doc.length,
+    state,
+  });
+  assert.deepEqual(
+    Array.from(result.options, ({ label }) => label),
+    ['safe', 'transformed'],
+  );
+
+  const safe = result.options.find(({ label }) => label === 'safe');
+  const transformed = result.options.find(({ label }) => label === 'transformed');
+  assert.equal(safe.apply(view, safe, 0, 4), undefined);
+  assert.equal(modules.nativeSnippetCalls.length, 1);
+  assert.match(modules.nativeSnippetCalls[0].template, /\$\{1:name\}/);
+  assert.equal(
+    transformed.apply(view, transformed, 0, view.state.doc.length),
+    true,
+  );
+  assert.equal(modules.nativeSnippetCalls.length, 1);
+  await runtime.unmount();
+});
+
 test('language mapping manager validates and manages mappings without raw JSON', async () => {
   const settingsValue = {
     'acode.plugin.snippets': { snippetLocation: '/custom' },
@@ -1409,6 +1495,42 @@ test('CodeMirror snippet completions are prioritized above built-in results', as
   assert.equal(completion.boost, 99);
   assert.equal(completion.section, undefined);
   assert.equal(completion.type, 'snippet');
+  await runtime.unmount();
+});
+
+test('CodeMirror falls back cleanly when native snippet helpers are unavailable', async () => {
+  const modules = createCodeMirrorModules({ nativeSnippets: false });
+  const runtime = createBaseRuntime({
+    isCodeMirror: true,
+    modules,
+    ace: null,
+    fsOperation() {
+      return {
+        async readFile() {
+          return 'snippet fun\n\tfunction ${1:name}() {$0}';
+        },
+      };
+    },
+  });
+  const file = { currentMode: 'javascript', filename: 'demo.js', type: 'editor' };
+  const state = createState('fun');
+  const view = createView(state);
+  Object.assign(runtime.editor, view);
+  runtime.editorManager.activeFile = file;
+  runtime.editorManager.panes = [{ activeFile: file, editor: runtime.editor }];
+
+  await runtime.init('/plugin/');
+  const extension = [...state.compartments.values()][0];
+  const completionSource = extension[0].provider()[0].autocomplete;
+  const result = await completionSource({
+    aborted: false,
+    explicit: true,
+    pos: state.doc.length,
+    state,
+  });
+  const completion = result.options[0];
+  assert.equal(completion.apply(runtime.editor, completion, 0, 3), true);
+  assert.equal(modules.nativeSnippetCalls.length, 0);
   await runtime.unmount();
 });
 

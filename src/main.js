@@ -4,6 +4,7 @@ import { createCodeMirrorSnippetSession } from './codemirror-snippet-session.mjs
 import { createSnippetsLanguage } from './snippets-language.mjs';
 import {
   compileSnippetTemplate,
+  compiledToCodeMirrorSnippet,
   createSnippetVariables,
   findMatchingSnippet,
   getCompletionPrefix,
@@ -164,7 +165,7 @@ class AceSnippetsAdapter {
     define(
       `ace/snippets/${scope}.snippets`,
       ['require', 'exports', 'module'],
-      (require, exports, module) => {
+      (_require, _exports, module) => {
         module.exports = snippets;
       },
     );
@@ -232,6 +233,27 @@ class CodeMirrorSnippetsAdapter {
     }
 
     this.acceptCompletion = autocomplete.acceptCompletion;
+    const nativeSnippetApis = [
+      'clearSnippet',
+      'hasNextSnippetField',
+      'hasPrevSnippetField',
+      'nextSnippetField',
+      'prevSnippetField',
+      'snippet',
+      'snippetCompletion',
+    ];
+    this.nativeSnippetsAvailable = nativeSnippetApis.every(
+      (name) => typeof autocomplete[name] === 'function',
+    );
+    if (this.nativeSnippetsAvailable) {
+      this.clearNativeSnippet = autocomplete.clearSnippet;
+      this.hasNextNativeSnippetField = autocomplete.hasNextSnippetField;
+      this.hasPrevNativeSnippetField = autocomplete.hasPrevSnippetField;
+      this.nextNativeSnippetField = autocomplete.nextSnippetField;
+      this.prevNativeSnippetField = autocomplete.prevSnippetField;
+      this.nativeSnippet = autocomplete.snippet;
+      this.nativeSnippetCompletion = autocomplete.snippetCompletion;
+    }
     this.startCompletion = autocomplete.startCompletion;
     this.indentMore = commands.indentMore;
     this.EditorState = state.EditorState;
@@ -293,6 +315,11 @@ class CodeMirrorSnippetsAdapter {
       ...this.getVisibleEditors(),
     ]);
     for (const view of installedViews) {
+      try {
+        this.clearNativeSnippet?.(view);
+      } catch {
+        // A removed split pane may already have destroyed its EditorView.
+      }
       if (this.compartment.get(view.state) === undefined) continue;
       try {
         view.dispatch({ effects: this.compartment.reconfigure([]) });
@@ -393,6 +420,8 @@ class CodeMirrorSnippetsAdapter {
     if (event.shiftKey) {
       if (this.session?.getSession(view.state)) {
         handled = this.session.navigate(view, -1);
+      } else {
+        handled = this.navigateNativeSnippet(view, -1);
       }
     } else {
       handled = this.handleTabCommand(view);
@@ -613,6 +642,22 @@ class CodeMirrorSnippetsAdapter {
     });
   }
 
+  compileNativeSnippet(snippet, file, state, position, matches = {}, selection) {
+    const variables = createSnippetVariables(
+      file,
+      state,
+      position,
+      new Date(),
+      selection,
+    );
+    return compiledToCodeMirrorSnippet(compileSnippetTemplate(snippet.content, {
+      indentation: '',
+      matches,
+      tabString: '\t',
+      variables,
+    }));
+  }
+
   getChoiceCompletions(context) {
     const group = this.session?.activeGroup(context.state);
     if (!group?.choices?.length) return null;
@@ -631,6 +676,10 @@ class CodeMirrorSnippetsAdapter {
     if (choices) return choices;
     if (!this.host.showInAutocomplete) return null;
     if (this.session?.getSession(context.state)) return null;
+    if (
+      this.hasNextNativeSnippetField?.(context.state) ||
+      this.hasPrevNativeSnippetField?.(context.state)
+    ) return null;
     const file = this.getFileForState(context.state);
     if (file?.type !== 'editor') return null;
 
@@ -650,20 +699,36 @@ class CodeMirrorSnippetsAdapter {
     for (const snippet of snippets) {
       if (snippet.unsupportedReason) continue;
       const label = snippet.name || snippet.tabTrigger;
-      options.push({
-        apply: (view, completion, from, to) => this.applyCompletion(
-          view,
-          snippet,
-          from,
-          to,
-        ),
+      const completion = {
         boost: 99,
         label,
         detail: label === snippet.tabTrigger
           ? 'Snippet'
           : snippet.tabTrigger,
         type: 'snippet',
-      });
+      };
+      const native = this.nativeSnippetsAvailable &&
+        context.state.selection.ranges.length === 1
+        ? this.compileNativeSnippet(
+          snippet,
+          file,
+          context.state,
+          context.pos,
+          {},
+          context.state.selection.main,
+        )
+        : null;
+      options.push(native && !native.unsupportedReason
+        ? this.nativeSnippetCompletion(native.template, completion)
+        : {
+          ...completion,
+          apply: (view, _completion, from, to) => this.applyCompletion(
+            view,
+            snippet,
+            from,
+            to,
+          ),
+        });
     }
 
     if (!options.length) return null;
@@ -812,10 +877,12 @@ class CodeMirrorSnippetsAdapter {
     if (this.session?.getSession(view.state)) {
       return this.session.navigate(view, 1);
     }
+    if (this.navigateNativeSnippet(view, 1)) return true;
     const file = this.getFileForState(view.state);
     if (file?.type !== 'editor') return false;
 
     const insertions = [];
+    let nativeInsertion = null;
     for (const selection of view.state.selection.ranges) {
       const position = selection.head;
       const line = view.state.doc.lineAt(position);
@@ -826,6 +893,27 @@ class CodeMirrorSnippetsAdapter {
         line.text.slice(cursorColumn),
       );
       if (!match) continue;
+      if (
+        this.nativeSnippetsAvailable &&
+        view.state.selection.ranges.length === 1
+      ) {
+        const native = this.compileNativeSnippet(
+          match.snippet,
+          file,
+          view.state,
+          position,
+          match.matches,
+          selection,
+        );
+        if (!native.unsupportedReason) {
+          nativeInsertion = {
+            from: line.from + match.from,
+            template: native.template,
+            to: line.from + match.to,
+          };
+          continue;
+        }
+      }
       insertions.push({
         compiled: this.compileSnippet(
           match.snippet,
@@ -839,8 +927,30 @@ class CodeMirrorSnippetsAdapter {
         to: line.from + match.to,
       });
     }
+    if (nativeInsertion) {
+      this.nativeSnippet(nativeInsertion.template)(
+        view,
+        null,
+        nativeInsertion.from,
+        nativeInsertion.to,
+      );
+      return true;
+    }
     if (!insertions.length) return false;
     return this.session.insert(view, insertions);
+  }
+
+  navigateNativeSnippet(view, direction) {
+    if (!view?.state) return false;
+    if (direction > 0) {
+      return this.hasNextNativeSnippetField?.(view.state)
+        ? Boolean(this.nextNativeSnippetField(view))
+        : false;
+    }
+    if (this.hasPrevNativeSnippetField?.(view.state)) {
+      return Boolean(this.prevNativeSnippetField(view));
+    }
+    return Boolean(this.hasNextNativeSnippetField?.(view.state));
   }
 }
 
